@@ -10,3 +10,7 @@ benchmark_results
 
 # Similar tool analysis and issue drafts, not for publication
 docs/similar_tools/*
+apbs_results
+
+# APBS writes an MC-shell I/O capture file into its working directory
+io.mc
