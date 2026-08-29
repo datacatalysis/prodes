@@ -68,4 +68,4 @@ def read(file):
         return pkas
 
     else:
-        raise ValueError("File extention not recognized by prodes")
+        raise ValueError("File extension not recognized by prodes")

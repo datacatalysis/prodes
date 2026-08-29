@@ -35,5 +35,5 @@ def test_read_loads_a_pka_file(tmp_path):
 def test_read_rejects_an_unsupported_extension(tmp_path):
     """Anything else is refused by name rather than guessed at."""
 
-    with pytest.raises(ValueError, match="File extention not recognized"):
+    with pytest.raises(ValueError, match="File extension not recognized"):
         prodes.read(str(tmp_path / "structure.cif"))
