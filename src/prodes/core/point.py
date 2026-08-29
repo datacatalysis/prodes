@@ -38,7 +38,7 @@ class Surface_point:
 
 
 class Property_point:
-    """Class which represents the the points onto which properties are projected"""
+    """Class which represents the points onto which properties are projected"""
 
     def __init__(self, x, y, z, ep=None, lipo=None):
         self.x = x
@@ -166,7 +166,7 @@ class Property_point:
 
 
 class Cell:
-    """Class which represents the the points onto which properties are projected"""
+    """Class which represents the points onto which properties are projected"""
 
     def __init__(self, size, x, y, z):
         self.x = x

@@ -11,6 +11,15 @@ benchmark_results
 # Similar tool analysis and issue drafts, not for publication
 docs/similar_tools/*
 
+# Working notes for one change: plans, the reviews of them, and the reviews of
+# the implementation. They are superseded by the code and the README as soon as
+# the change lands, and parts of them record conclusions later shown to be
+# wrong. Anything worth keeping belongs in a docstring, the README, or an issue.
+# Name them so the intent is visible in a file listing, for example
+# plan_thing_notrack.md or plan_thing_REVIEW1_notrack.md. Use git add -f to
+# commit one deliberately.
+*_notrack.md
+
 # APBS comparison outputs and the capture file APBS writes into its working directory
 apbs_results
 io.mc
