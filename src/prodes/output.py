@@ -120,13 +120,18 @@ def prodes_version():
         return "unknown"
 
 
-def run_metadata(pdb_file, settings, n_points, ep, disulfides=0):
+def run_metadata(pdb_file, settings, n_points, ep, disulfides=0, alternate_conformers=None):
     """Returns the record of what was run, written into every bundle.
 
     The disulfide count is here rather than in the feature table because it
     describes the input rather than the protein's surface, and because it is how
     a user checks that detection saw what they expected: a structure that should
     have disulfides and reports none is titrating its cysteines as free thiols.
+
+    The alternate conformation counts are here for the same reason and for one
+    more: the bundle ships the input file unchanged, so its structure still holds
+    every conformation while the features describe only one. Without this record
+    there is nothing to say which conformation was described.
     """
 
     return {
@@ -135,6 +140,7 @@ def run_metadata(pdb_file, settings, n_points, ep, disulfides=0):
         "input_file": str(pdb_file),
         "settings": settings,
         "disulfides": int(disulfides),
+        "alternate_conformers": alternate_conformers or {},
         "surface_points": int(n_points),
         "ep_min_volts": round(float(ep.min()), 3) if n_points else None,
         "ep_max_volts": round(float(ep.max()), 3) if n_points else None,

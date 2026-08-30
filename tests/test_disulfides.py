@@ -41,6 +41,7 @@ from prodes.calculations.disulfides import (
     geometric_disulfides,
 )
 from prodes.io.parser import PDBparser, read_ssbond_line
+from tests.pdb_records import atom_line, cysteine_lines, pdb_line  # noqa: F401
 
 LYSOZYME = "tests/data/1GDW.pdb.zip"
 PHOSPHORYLASE = "tests/data/1GPB.pdb.zip"
@@ -63,59 +64,6 @@ def bonded_numbers(structure):
     """Returns the detected bonds as a set of residue number pairs."""
 
     return {frozenset((first.number, second.number)) for first, second in structure.disulfides}
-
-
-def pdb_line(fields):
-    """Returns an 80 column PDB record built from (start column, text) pairs.
-
-    Columns are given as the format's own 1-based numbers, so they can be read
-    straight off the specification rather than counted out in an f-string.
-    """
-
-    line = [" "] * 80
-    for column, text in fields:
-        line[column - 1 : column - 1 + len(text)] = text
-
-    return "".join(line).rstrip()
-
-
-def atom_line(serial, name, residue_name, chain, number, x, y, z, element):
-    """Returns one ATOM record, so a test can write the structure it needs."""
-
-    return pdb_line(
-        [
-            (1, "ATOM"),
-            (7, f"{serial:5d}"),
-            (13, f"{name:<4s}"),
-            (18, f"{residue_name:>3s}"),
-            (22, chain),
-            (23, f"{number:4d}"),
-            (31, f"{x:8.3f}"),
-            (39, f"{y:8.3f}"),
-            (47, f"{z:8.3f}"),
-            (55, "  1.00"),
-            (61, "  0.00"),
-            (77, f"{element:>2s}"),
-        ]
-    )
-
-
-def cysteine_lines(serial, chain, number, x):
-    """Returns the six heavy atoms of one cysteine, placed with its SG at x.
-
-    The other atoms only have to be somewhere sensible: nothing under test reads
-    them, but a residue with no backbone is not a residue the parser would ever
-    produce.
-    """
-
-    return [
-        atom_line(serial, "N", "CYS", chain, number, x - 3.0, 0.0, 0.0, "N"),
-        atom_line(serial + 1, "CA", "CYS", chain, number, x - 2.0, 0.0, 0.0, "C"),
-        atom_line(serial + 2, "C", "CYS", chain, number, x - 2.0, 1.5, 0.0, "C"),
-        atom_line(serial + 3, "O", "CYS", chain, number, x - 2.0, 2.5, 0.0, "O"),
-        atom_line(serial + 4, "CB", "CYS", chain, number, x - 1.0, 0.0, 0.0, "C"),
-        atom_line(serial + 5, "SG", "CYS", chain, number, x, 0.0, 0.0, "S"),
-    ]
 
 
 def write_cysteine_structure(path, sulfur_positions, records=()):
@@ -557,3 +505,31 @@ def test_running_detection_twice_gives_the_same_answer(tmp_path):
     assert len(bonded) == 2 * len(structure.disulfides)
     # Without the records this time, so geometry decides and the answer changes.
     assert bonded_numbers(structure) == {frozenset((1, 2))}
+
+
+def test_a_disordered_cysteine_pair_is_still_found_geometrically(tmp_path):
+    """a disulfide between two disordered cysteines, in a file with no SSBOND records
+
+    The record route was never broken by the parser defect: record_disulfides
+    resolves a record through the chain and residue number and never reads an
+    atom name, so a file carrying SSBOND records found its bonds even when its
+    cysteines were disordered. The geometric route is the one that failed, since
+    cysteine_sulfurs selects on the name SG and a disordered sulfur used to
+    arrive called "SG A".
+
+    Both cysteines must also stop titrating, which is the charge consequence and
+    the reason the bond is detected at all.
+    """
+
+    from tests.pdb_records import cysteine_lines, write_structure
+
+    lines = []
+    lines.extend(cysteine_lines(1, "A", 1, 0.0, altloc="A", occupancy=0.60))
+    lines.extend(cysteine_lines(7, "A", 1, 8.0, altloc="B", occupancy=0.40))
+    lines.extend(cysteine_lines(13, "A", 2, 2.05, altloc="A", occupancy=0.60))
+    lines.extend(cysteine_lines(19, "A", 2, 9.0, altloc="B", occupancy=0.40))
+    structure = PDBparser().parse(write_structure(tmp_path / "disordered_cystine.pdb", lines))
+
+    assert [atom.name for atom in structure.atoms if atom.name == "SG"] == ["SG", "SG"]
+    assert len(structure.disulfides) == 1
+    assert [residue.side_chain_pka for residue in structure.residues] == [None, None]
