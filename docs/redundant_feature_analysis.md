@@ -1,5 +1,7 @@
 # Redundant Feature Analysis
 
+> **Computed before version 7.0.** The 820 protein runs behind this matrix read alternate conformations as duplicate atoms, so any structure in that set with alternate conformations contributed slightly different feature values than it would today. The redundancy structure this analysis reports is a property of the feature definitions rather than of any one structure, so the 105 to 54 cut stands; the individual R² values would move a little if recomputed. See [alternate conformations](alternate_conformations.md).
+
 ## Method
 
 R² (Pearson correlation squared) was computed between all pairs of the 105 numeric

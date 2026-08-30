@@ -553,7 +553,14 @@ def calculate(
         "full_features": full_features,
         "ionic_strength_molar": ionic_strength_molar,
     }
-    metadata = run_metadata(pdb_file, settings, len(coords), ep, disulfides=len(structure.disulfides))
+    metadata = run_metadata(
+        pdb_file,
+        settings,
+        len(coords),
+        ep,
+        disulfides=len(structure.disulfides),
+        alternate_conformers=structure.alternate_conformers.summary() if structure.alternate_conformers else None,
+    )
 
     return write_bundle(out_file, structure.name, calculated_features, coords, ep, lipo, pdb_file, metadata, hydro_scale)
 

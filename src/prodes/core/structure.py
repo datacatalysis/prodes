@@ -20,6 +20,10 @@ class Structure:
         # Filled in by prodes.calculations.disulfides.assign_disulfides, which
         # the parser calls on every structure it reads.
         self.disulfides = []
+        # What the parser dropped when it collapsed alternate conformations, as
+        # a prodes.io.parser.AlternateConformerReport. None for a structure that
+        # was not read from a file, which has no conformations to collapse.
+        self.alternate_conformers = None
 
     def _compute_centroid(self):
         coords = np.array([[a.x, a.y, a.z] for a in self.heavy_atoms])

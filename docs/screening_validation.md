@@ -4,6 +4,8 @@ Measured 2026-08-26 on the branch that adds ionic screening, using the shipped c
 
 Reference: an APBS Poisson-Boltzmann solution at pH 7, 150 mM, protein dielectric 4, sampled at the exact coordinates of the Prodes surface points. Thirteen proteins, 390,427 surface points. The measurement and the reference data are on the `analysis/apbs-electrostatics-comparison` branch.
 
+> **Computed before version 7.0.** These numbers come from runs in which alternate conformations were still read as duplicate atoms and disordered residues silently carried no charge. Three of the thirteen proteins here (1F8N, 4F5S, 6PO0) contain alternate conformations, so their rows would shift slightly if recomputed. The conclusion is unaffected: rechecked on 1F8N, the positive surface fraction moves from 44.01% to 44.86%. See [alternate conformations](alternate_conformations.md).
+
 ## Result
 
 | | shipped 4.0.0 | screened, 150 mM |

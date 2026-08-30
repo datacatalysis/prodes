@@ -16,6 +16,8 @@ class Atom:
         z,
         segment_id="",
         element=None,
+        altloc="",
+        occupancy=None,
         structure=None,
         chain=None,
         residue=None,
@@ -32,6 +34,11 @@ class Atom:
         self.z = z
         self.segment_id = segment_id
         self.element = element
+        # The alternate location this atom was modelled under, and how much of
+        # the time it is there. Blank and None respectively for an atom that
+        # carries neither, which is every atom of a structure with no disorder.
+        self.altloc = altloc
+        self.occupancy = occupancy
         self.structure = structure
         self.chain = chain
         self.residue = residue
