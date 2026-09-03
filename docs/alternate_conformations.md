@@ -76,4 +76,6 @@ The same counts go into `prodes_run.json` as `alternate_conformers`. That matter
 
 ## Where the code is
 
-`prodes.io.parser`: `elect_conformers` makes the choice, `rank_letters` and `conformer_rank` order the conformations, `read_occupancy` and `residue_key` read the columns. The parse reads the file into memory first, because which conformation to keep cannot be decided until all of them have been seen and atoms are otherwise committed to the structure as they are read.
+`prodes.io.conformers`: `elect_conformers` makes the choice, `rank_letters` and `conformer_rank` order the conformations, and `residue_key` says which records belong to one residue. The alternate location and the occupancy each arrive as their own field on an `AtomRecord`, read by `prodes.io.pdb_reader`. The parse reads every record into memory first, because which conformation to keep cannot be decided until all of them have been seen.
+
+From version 7.1 the records come from `Bio.PDB.PDBParser`, driven with a record collecting `StructureBuilder` of prodes' own rather than through Biopython's `Structure` entity tree. That is deliberate: Biopython represents disorder rather than resolving it, and its defaults for resolving it would undo the rules above. See `docs/pdb_reading.md`.
