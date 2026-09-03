@@ -1,11 +1,7 @@
 import logging
-import tempfile
 import zipfile
-from collections import defaultdict
-from dataclasses import dataclass, field
 from math import isfinite
 from pathlib import Path
-from statistics import median
 
 import numpy as np
 
@@ -14,41 +10,15 @@ from prodes.core.atom import Atom
 from prodes.core.chain import Chain
 from prodes.core.residue import Residue
 from prodes.core.structure import Structure
+from prodes.io.conformers import elect_conformers, report_alternate_conformers
+from prodes.io.pdb_reader import COORDINATE_DECIMALS, pdb_lines, read_atom_records
 
 logger = logging.getLogger(__name__)
 
-# Ranks a conformation whose file gives no occupancy at all. Below zero so that
-# it loses to every stated occupancy, zero included, and the choice between two
-# unstated ones falls to the order they appear in.
-UNKNOWN_OCCUPANCY = -1.0
-
-# Occupancies closer together than this are the same occupancy. Deposited values
-# carry two decimals, so the gap is enormous compared with anything real and
-# small compared with the float noise it exists to absorb.
-OCCUPANCY_TOLERANCE = 1e-6
-
-
-@dataclass
-class AlternateConformerReport:
-    """What collapsing the alternate conformations of one structure came to.
-
-    Recorded in the run record as well as logged, because a warning is gone as
-    soon as the run scrolls past and this is what is left to explain the numbers
-    to somebody looking at them a month later.
-    """
-
-    residues: int = 0
-    dropped: int = 0
-    renamed: list = field(default_factory=list)
-
-    def summary(self):
-        """Returns the counts as plain types, for the run record."""
-
-        return {
-            "residues_with_alternates": self.residues,
-            "atoms_dropped": self.dropped,
-            "residues_renamed": [f"{name} {key[0]}{key[1].strip()}{key[2].strip()}" for key, name, _ in self.renamed],
-        }
+# The record types Biopython reads coordinates from, spelled as it spells them:
+# six columns, not a stripped name. Anything in this module that counts records
+# has to agree with the reader about what one is.
+COORDINATE_RECORDS = ("ATOM  ", "HETATM")
 
 
 def pdb_name_in_archive(archive: zipfile.ZipFile, source):
@@ -123,204 +93,292 @@ def read_ssbond_line(line):
     return chain1, number1, chain2, number2, symmetry1, symmetry2
 
 
-def residue_key(line):
-    """Returns (chain, residue sequence number, insertion code) for one atom record.
+def coordinate_lines(lines):
+    """Returns the ATOM and HETATM records among the lines of a PDB file.
 
-    The insertion code is in the key even though the parser otherwise ignores
-    column 27 and merges residues that differ only by it. That is not a fix for
-    the merging, which is its own defect: it only stops one alternate location
-    being elected across two residues that happen to share a number, which would
-    be a new error rather than an old one.
+    Matched on the six columns rather than on the stripped record name, which is
+    how the reader matches them, so that the count below cannot disagree with
+    the reader about what a coordinate record is and then raise for the wrong
+    reason.
     """
 
-    return line[21], line[22:26], line[26]
+    return [line for line in lines if line[0:6] in COORDINATE_RECORDS]
 
 
-def read_occupancy(line):
-    """Returns the occupancy of one atom record, or None where the file does not give one.
+def check_records_were_all_read(lines, records, source):
+    """Raises if the reader returned fewer records than the file holds coordinate lines.
 
-    None rather than 0.0, because zero is a real occupancy and a file that stops
-    before column 60 has not said the atom is absent. Keeping the two apart lets
-    a structure with no occupancies fall through to the tie break instead of
-    having every conformer tie at zero.
+    Not a defensive assertion about a library bug. Biopython stops reading
+    coordinates at the first END or CONECT record and returns everything after
+    it as an unparsed trailer, so a file that writes coordinates after either
+    one loses them silently. Concatenated structures, files that write CONECT
+    for a ligand before the rest of its atoms, and anything that writes END per
+    model all reach it. prodes reads such a file today, so the choice is between
+    losing atoms quietly and saying so, and for a tool whose output is a set of
+    numbers there is no choice.
+
+    Note that only the six column form the specification defines is recognised.
+    A bare three character END, which prodes' own write_pdb produces and which
+    tests/pdb_records writes, does not truncate anything.
+
+    Raises:
+        ValueError: if any coordinate record was not read.
     """
 
-    try:
-        occupancy = float(line[54:60])
-    except (IndexError, ValueError):
-        return None
-
-    # nan and inf parse cleanly and then poison every comparison downstream,
-    # where the failure surfaces as an integer conversion error naming neither
-    # the file nor the column. A value that is not a real occupancy is no more
-    # usable than a blank one.
-    if not isfinite(occupancy):
-        return None
-
-    return occupancy
-
-
-def conformer_rank(occupancies):
-    """Returns the occupancy a conformer is ranked by, given its atoms' occupancies.
-
-    The median, not the mean. Occupancy is usually constant across a conformer's
-    atoms, and the median recovers that constant while ignoring a single atom
-    refined away from the rest; 1CBN residue 34 carries both 0.80 and 1.00 under
-    the same letter, and 3NIR refines every alternate atom separately. The mean
-    is dragged by those strays and the sum would prefer whichever conformer has
-    more atoms rather than the one that is there more of the time.
-
-    A conformer whose file gives no occupancy at all ranks below every conformer
-    that has one, so that the choice falls to the order the letters appear in.
-    """
-
-    known = [occupancy for occupancy in occupancies if occupancy is not None]
-    if not known:
-        return UNKNOWN_OCCUPANCY
-
-    return median(known)
-
-
-def elect_conformers(lines, identifier):
-    """Chooses one alternate location per residue and returns the atom records to keep.
-
-    A residue modelled in more than one conformation writes each of them out in
-    full, and every one of those atoms is otherwise read as a real atom, so the
-    same side chain is counted twice in the surface and its charge is counted
-    twice with it. Exactly one conformation is kept.
-
-    The choice is made per residue rather than per atom. Choosing per atom looks
-    equivalent and is not: a residue can be modelled as two *different* amino
-    acids, and 1CBN residue 22 is a serine and a proline at one position.
-    Choosing the highest occupancy atom for each name independently then
-    assembles the serine's OG beside the proline's CG and CD, which is a side
-    chain no protein has.
-
-    Atoms with no alternate location belong to every conformation and are always
-    kept, which is what makes the ordinary case, an ordered backbone with a
-    disordered side chain, come out whole.
-
-    Nothing is taken from a losing conformation to complete the winning one.
-    That rule was tried and removed: measured over thousands of disordered
-    residues it never once supplied a heavy atom, because a conformation is
-    written short precisely when it is the minor one, so the best occupied
-    conformation is never the less complete. What it did supply was hydrogens
-    carrying the other rotamer's coordinates, several of them landing a fraction
-    of an Angstrom from an atom they are not bonded to, and a duplicate of any
-    atom the residue also wrote without a letter.
-
-    Args:
-        lines: every line of the file, in order.
-        identifier: the record name being read, ATOM or HETATM.
-
-    Returns:
-        (keep, names, report). keep is the set of line indices to parse. names
-        maps a residue key to the residue name of the winning conformation,
-        which is not always the name its first atom carries. report is an
-        AlternateConformerReport for the log and the run record.
-    """
-
-    conformers = defaultdict(lambda: defaultdict(list))
-    for index, line in enumerate(lines):
-        if line[0:6].strip() != identifier:
-            continue
-        conformers[residue_key(line)][line[16].strip()].append(index)
-
-    keep = set()
-    names = {}
-    dropped = 0
-    affected = 0
-    renamed = []
-    for key, by_letter in conformers.items():
-        letters = [letter for letter in by_letter if letter]
-        if not letters:
-            keep.update(by_letter[""])
-            continue
-
-        affected += 1
-        winner = elect_letter(lines, by_letter, letters)
-        winning_name = lines[by_letter[winner][0]][17:20].strip()
-        names[key] = winning_name
-
-        # Filtered on the residue name as well as the letter. A letter is
-        # normally one conformation of one residue, but nothing in the format
-        # requires it, and a letter spanning two residue names would otherwise
-        # produce the chimera that choosing per residue exists to prevent.
-        kept = [index for index in by_letter[winner] if lines[index][17:20].strip() == winning_name]
-
-        keep.update(by_letter[""])
-        keep.update(kept)
-        dropped += sum(len(by_letter[letter]) for letter in letters) - len(kept)
-
-        # Reported against the name the residue used to end up with, which was
-        # that of its first atom, so the warning marks residues whose reported
-        # identity actually changes rather than every residue modelled as more
-        # than one amino acid.
-        first = min(index for indices in by_letter.values() for index in indices)
-        if lines[first][17:20].strip() != winning_name:
-            renamed.append((key, winning_name, [lines[first][17:20].strip()]))
-
-    return keep, names, AlternateConformerReport(residues=affected, dropped=dropped, renamed=renamed)
-
-
-def rank_letters(lines, by_letter, letters):
-    """Returns one residue's alternate location letters, best first.
-
-    Ranked on occupancy, and on the order the letters appear in the file where
-    occupancy cannot separate them. Ties are not a corner worth glossing over:
-    across a survey of real structures roughly a quarter of alternate residues
-    are written at exactly equal occupancy, so the tie break decides a large
-    share of every choice made here and has to give the same answer on each run.
-
-    Occupancies are compared at a tolerance rather than exactly. A median of
-    equal values is not the same float for every atom count, so an exact
-    comparison would rank a three atom conformation below a two atom one at the
-    same nominal occupancy and the tie break would never run at all.
-    """
-
-    ranks = {letter: conformer_rank([read_occupancy(lines[index]) for index in by_letter[letter]]) for letter in letters}
-
-    return sorted(letters, key=lambda letter: (-round(ranks[letter] / OCCUPANCY_TOLERANCE), by_letter[letter][0]))
-
-
-def elect_letter(lines, by_letter, letters):
-    """Returns the winning alternate location letter for one residue."""
-
-    return rank_letters(lines, by_letter, letters)[0]
-
-
-def report_alternate_conformers(report, name):
-    """Warns about the alternate conformations collapsed out of one structure.
-
-    One line for the structure rather than one per residue, which on a real
-    structure would be hundreds. A structure with no alternates says nothing.
-
-    A residue whose winning conformation carries a different amino acid is named
-    individually, because that changes the sequence and not only the geometry,
-    and because it is the case where a pKa file generated from the original
-    coordinates no longer agrees with the residue it was meant for.
-    """
-
-    if report.residues == 0:
+    written = coordinate_lines(lines)
+    if len(written) == len(records):
         return
 
-    logger.warning(
-        "%s has %d residues modelled in more than one conformation; keeping the best occupied of each and dropping %d atoms",
-        name,
-        report.residues,
-        report.dropped,
+    raise ValueError(
+        f"{source} holds {len(written)} coordinate records but only {len(records)} could be read; "
+        "the usual cause is an ATOM or HETATM record written after an END or CONECT record, "
+        "which the reader treats as the end of the coordinates"
     )
 
-    for key, winning_name, alternatives in report.renamed:
+
+def warn_about_unwritable_coordinates(lines, source):
+    """Warns once if a coordinate column carries more precision than the format holds.
+
+    The eight column coordinate field is three decimals, and prodes reads the
+    columns through a reader that hands them over as float32 and rounds them
+    back to those three decimals, which is exact for every value the field can
+    hold. A file writing a fourth decimal loses it. That is a fair trade for a
+    non-conforming file and a bad one to make in silence, so it is said out loud
+    on the pass that counts the records.
+    """
+
+    unwritable = 0
+    unusable = 0
+    for line in coordinate_lines(lines):
+        for column in (line[30:38], line[38:46], line[46:54]):
+            try:
+                written = float(column)
+            except ValueError:
+                continue
+
+            # nan and inf parse cleanly and then poison every distance computed
+            # from them, so they are their own complaint rather than a rounding
+            # one: nan != nan would otherwise report them as imprecise.
+            if not isfinite(written):
+                unusable += 1
+                continue
+
+            # Asked as "does rounding change it" rather than as "does it have a
+            # fourth decimal", so that a trailing zero and an exponent, which
+            # lose nothing, do not warn.
+            if round(written, COORDINATE_DECIMALS) != written:
+                unwritable += 1
+
+    if unwritable:
         logger.warning(
-            "%s %s%s%s is modelled as %s as well; keeping %s, so the sequence and any pKa read for it differ from the file",
-            name,
-            key[0],
-            key[1].strip(),
-            key[2].strip(),
-            " and ".join(alternatives),
-            winning_name,
+            "%s writes %d coordinate columns to a precision the PDB format does not hold; they are read to %d decimals",
+            source,
+            unwritable,
+            COORDINATE_DECIMALS,
         )
+
+    if unusable:
+        logger.warning(
+            "%s writes %d coordinate columns that are not numbers, and every distance measured from those atoms will be meaningless",
+            source,
+            unusable,
+        )
+
+
+def warn_about_models(records, source):
+    """Warns if the file holds more than one model, because prodes merges them.
+
+    prodes has no notion of a model. Every model's atoms are read into one
+    structure, and because a residue number that reappears does not start a new
+    residue, the later models' atoms pile onto whichever residue was made last:
+    a 20 model NMR ensemble comes out as one impossible structure with tens of
+    thousands of atoms in a single residue. That is its own defect with its own
+    issue, and it is not fixed here, so the least this can do is say that the
+    number it is about to report describes something that is not a protein.
+    """
+
+    models = {record.model for record in records}
+    if len(models) > 1:
+        logger.warning(
+            "%s holds %d models and prodes has no notion of one; every model's atoms are read into a single structure, "
+            "which is not a structure of anything, so take one model out of the file before describing it",
+            source,
+            len(models),
+        )
+
+
+def ssbond_records(lines):
+    """Returns every SSBOND record of a PDB file, as read by read_ssbond_line.
+
+    Read from the text rather than from the reader. Biopython does not parse
+    SSBOND at all: its header stops at the first coordinate record and carries
+    the title, the resolution and the journal, and nothing about disulfides. A
+    lost SSBOND is a charge change rather than a cosmetic one, so this is read
+    the way it always was, from anywhere in the file.
+    """
+
+    records = []
+    for line in lines:
+        if line[0:6].strip() == "SSBOND":
+            record = read_ssbond_line(line)
+            if record is not None:
+                records.append(record)
+
+    return records
+
+
+def as_object_array(items):
+    """Returns a list of prodes objects as the object array the entities hold them in."""
+
+    array = np.empty(len(items), dtype=object)
+    array[:] = items
+    return array
+
+
+def build_structure(name, records):
+    """Builds a Structure, its chains, its residues and its atoms from elected records.
+
+    The grouping rules are the ones prodes has always used, quirks included,
+    because this change is about where the fields come from and not about what a
+    residue is:
+
+    - A chain is its name. A name seen before switches back to the chain that
+      already has it rather than starting a second one.
+    - A residue is a (chain, residue number) pair, and the insertion code is not
+      in it, so a Kabat numbered H100 and H100A are one residue. That is issue
+      #14 and it is deliberately not fixed here.
+    - The test is membership in the numbers already seen in that chain, so a
+      number that reappears after another has intervened does not start a new
+      residue: its atoms join whichever residue was made most recently. That is
+      the mechanism behind the damage an NMR ensemble takes, issue #13, and it
+      is also deliberately not fixed here.
+    - The N terminus is the first residue of a chain. The C terminus is written
+      on the chain's last residue at the moment a new chain name appears, and on
+      the structure's last residue at the end, which is not the same as "the
+      last residue of every chain" for a file whose chains are interleaved.
+
+    Collections are built as lists and converted to object arrays once. Growing
+    them an element at a time with np.concatenate, which is what this replaced,
+    cost more than the whole of the rest of the parse.
+    """
+
+    structure = Structure(name)
+    chains = {}
+    chain_order = []
+    residue_numbers = {}
+    chain_atoms = {}
+    chain_residues = {}
+    residue_atoms = {}
+    atoms = []
+    residues = []
+    current_chain = None
+    current_residue = None
+
+    for record in records:
+        atom = Atom(
+            record.identifier,
+            record.name,
+            record.residue_name,
+            record.chain_name,
+            record.residue_number,
+            record.x,
+            record.y,
+            record.z,
+            segment_id=record.segment_id,
+            element=record.element,
+            altloc=record.altloc,
+            occupancy=record.occupancy,
+        )
+        atom.structure = structure
+        atoms.append(atom)
+
+        if record.chain_name not in chains:
+            if chain_order:
+                chain_residues[current_chain.name][-1].terminus = "C"
+            current_chain = Chain(record.chain_name, structure)
+            chains[record.chain_name] = current_chain
+            chain_order.append(record.chain_name)
+            residue_numbers[record.chain_name] = set()
+            chain_atoms[record.chain_name] = []
+            chain_residues[record.chain_name] = []
+        elif record.chain_name != current_chain.name:
+            current_chain = chains[record.chain_name]
+
+        atom.chain = current_chain
+        chain_atoms[current_chain.name].append(atom)
+
+        if record.residue_number not in residue_numbers[current_chain.name]:
+            current_residue = Residue(record.residue_name, structure, record.residue_number, current_chain)
+            if not chain_residues[current_chain.name]:
+                current_residue.terminus = "N"
+            residue_numbers[current_chain.name].add(record.residue_number)
+            chain_residues[current_chain.name].append(current_residue)
+            residue_atoms[current_residue] = []
+            residues.append(current_residue)
+
+        atom.residue = current_residue
+        residue_atoms[current_residue].append(atom)
+
+    structure.atoms = as_object_array(atoms)
+    structure.residues = as_object_array(residues)
+    structure.chains = as_object_array([chains[chain_name] for chain_name in chain_order])
+    for chain_name in chain_order:
+        chains[chain_name].atoms = as_object_array(chain_atoms[chain_name])
+        chains[chain_name].residues = as_object_array(chain_residues[chain_name])
+    for residue in residues:
+        residue.atoms = as_object_array(residue_atoms[residue])
+
+    return structure
+
+
+def parse_pdb_text(text, name, identifier="ATOM"):
+    """Reads the text of a PDB file into a Structure.
+
+    The records are read in full before anything is built, because which
+    conformation of a disordered residue to keep cannot be decided until all of
+    them have been seen.
+
+    SSBOND records are collected on the same text and handed to the disulfide
+    detection at the end, so that any structure which has been parsed from a
+    file already knows which of its cysteines are bonded. Anything that builds a
+    Structure some other way has to call assign_disulfides itself. They are only
+    read while reading protein atoms: under a different identifier the parser is
+    not building residues those records could refer to.
+
+    Args:
+        text: the text of a PDB file.
+        name: the name to give the structure, which becomes the output ID.
+        identifier: the record type to build atoms from, ATOM or HETATM.
+
+    Raises:
+        ValueError: if the file holds no records of the requested type, or if
+            any coordinate record could not be read.
+    """
+
+    lines = pdb_lines(text)
+    records = read_atom_records(text, name)
+    check_records_were_all_read(lines, records, name)
+    warn_about_unwritable_coordinates(lines, name)
+
+    # One record type at a time. Electing over both would let a water that
+    # happens to share a chain and residue number with a protein residue decide
+    # that residue's conformation.
+    records = [record for record in records if record.identifier == identifier]
+    if not records:
+        raise ValueError(f"{name} holds no {identifier} records")
+
+    warn_about_models(records, name)
+
+    kept, report = elect_conformers(records)
+
+    structure = build_structure(name, kept)
+    structure.alternate_conformers = report
+    report_alternate_conformers(report, name)
+
+    structure.residues[-1].terminus = "C"
+    assign_disulfides(structure, ssbond_records(lines) if identifier == "ATOM" else [])
+
+    return structure
 
 
 class PDBparser:
@@ -328,202 +386,31 @@ class PDBparser:
     def parse(self, file, identifier="ATOM"):
         """Parses pdb files, either plain or held in a zip archive
 
-        A zipped structure is extracted to a temporary file and parsed from
-        there, so that callers can point at a .pdb.zip without unpacking it
-        themselves.
+        A zipped structure is read straight out of the archive, so that callers
+        can point at a .pdb.zip without unpacking it themselves.
 
         The structure is named after the file the caller named, which is also
         what ends up in the ID column of the output. For an archive that is the
         archive itself and not its member, so bar.pdb.zip holding foo.pdb gives
         a structure called bar.
+
+        Raises:
+            ValueError: if the file is not a .pdb or a .pdb.zip.
         """
 
         self.identifier = identifier
         path = Path(file)
 
+        # Checked before anything is read, so that a name the parser does not
+        # handle is refused for that reason rather than for not existing.
         if path.suffix == ".zip":
-            with tempfile.TemporaryDirectory() as directory:
-                return self._parse_pdb(Path(extract_pdb(path, directory)), Path(path.stem).stem)
-
-        return self._parse_pdb(path, path.stem)
-
-    def _parse_pdb(self, path: Path, name: str):
-        """Parses one plain PDB file under a name chosen by the caller.
-
-        Args:
-            path: path to a .pdb file.
-            name: name to give the structure, which becomes the output ID.
-
-        Raises:
-            ValueError: if the file is not a .pdb.
-        """
-
-        if path.suffix != ".pdb":
+            name = Path(path.stem).stem
+        elif path.suffix == ".pdb":
+            name = path.stem
+        else:
             raise ValueError("File extension not recognized by parser")
 
-        with open(path) as pdb:
-            return self._read_pdb(pdb, name)
-
-    def _read_pdb(self, pdb, name):
-        """Function takes a PDB formatted file and returns a Structure object which contains all atom information of the file
-
-        SSBOND records are collected on the same pass and handed to the
-        disulfide detection at the end, so that any structure which has been
-        parsed from a file already knows which of its cysteines are bonded.
-        Anything that builds a Structure some other way has to call
-        assign_disulfides itself.
-        """
-
-        current_structure = self._create_structure(name)
-
-        # Read in full before building anything: which conformation of a
-        # disordered residue to keep cannot be decided until all of them have
-        # been seen, and _add_atom commits an atom the moment it is read. The
-        # text is small next to the Atom objects the parse is about to make.
-        lines = list(pdb)
-        keep, winning_names, report = elect_conformers(lines, self.identifier)
-        current_structure.alternate_conformers = report
-        report_alternate_conformers(report, name)
-
-        ssbond_records = []
-        for index, line in enumerate(lines):
-            identifier = line[0:6].strip()
-            if identifier == self.identifier:
-                if index not in keep:
-                    continue
-                information = self._read_line(line)
-                # The residue is named for the conformation that won, not for
-                # whichever atom happened to arrive first. A residue modelled as
-                # two different amino acids can write a shared backbone atom
-                # under the name of the conformation that lost.
-                information["residue_name"] = winning_names.get(residue_key(line), information["residue_name"])
-                current_atom = Atom(identifier, **information)
-                self._add_atom(current_atom, current_structure)
-
-            # Only while reading protein atoms. Under a different identifier the
-            # parser is not building residues these records could refer to.
-            elif identifier == "SSBOND" and self.identifier == "ATOM":
-                record = read_ssbond_line(line)
-                if record is not None:
-                    ssbond_records.append(record)
-
-        current_structure.residues[-1].terminus = "C"
-        assign_disulfides(current_structure, ssbond_records)
-
-        return current_structure
-
-    def _create_structure(self, name):
-        """initializes the parser"""
-
-        self.current_chain = ""
-        self.current_residue = ""
-        self.residue_numbers = {}
-        self.chain_names = []
-        return Structure(name)
-
-    def _read_line(self, line):
-        """Reads one atom record into the fields an Atom is built from.
-
-        Columns 13-16 are the atom name and column 17 is the alternate location.
-        Reading the two together, which this did, gave a disordered cysteine the
-        name "SG A", and a name like that matches nothing the rest of the package
-        looks for: not the charged atoms of its residue, not the aromatic carbons
-        that carry their own radius, not the SG a disulfide is found from. The
-        residue kept its atoms and quietly lost its charge.
-
-        Returned as a dict and passed to Atom by keyword. Positional was how
-        occupancy and temperature factor once ended up in segment_id and element.
-        """
-
-        return {
-            "name": line[12:16].strip(),
-            "altloc": line[16].strip(),
-            "residue_name": line[17:20].strip(),
-            "chain_name": line[21].strip(),
-            "residue_number": int(line[22:26].strip()),
-            "x": float(line[30:38].strip()),
-            "y": float(line[38:46].strip()),
-            "z": float(line[46:54].strip()),
-            "occupancy": read_occupancy(line),
-            "segment_id": line[72:76].strip(),
-            "element": line[76:78].strip(),
-        }
-
-    def _add_atom(self, atom, structure):
-        """Adds a atom object to a structure object"""
-
-        addarray = np.array([atom])
-        structure.atoms = np.concatenate((structure.atoms, addarray))
-        atom.structure = structure
-
-        # Find the chain of the atom
-        if atom.chain_name not in self.chain_names:
-            if len(self.chain_names) != 0:
-                self.current_chain.residues[-1].terminus = "C"
-            self.current_chain = self._make_new_chain(structure, atom)
-
-        elif atom.chain_name != self.current_chain.name:
-            self.current_chain = structure.chains[self.chain_names.index(atom.chain_name)]
-
-        atom.chain = self.current_chain
-        self._add_atom_to_chain(atom, self.current_chain)
-
-        # Find the residue of the atom
-        if atom.residue_number not in self.residue_numbers[self.current_chain.name]:
-            self.current_residue = self._make_new_residue(structure, atom)
-
-        atom.residue = self.current_residue
-        self._add_atom_to_residue(atom, self.current_residue)
-
-    def _make_new_chain(self, structure, atom):
-        """Makes a new chain object"""
-
-        self.current_chain = Chain(atom.chain_name, atom.structure)
-        self._add_chain_to_structure(self.current_chain, structure)
-        self.chain_names.append(atom.chain_name)
-        self.residue_numbers[self.current_chain.name] = []
-        return self.current_chain
-
-    def _add_atom_to_chain(self, atom, chain):
-        """Adds an atom object to a chain object"""
-
-        addarray = np.array([atom])
-        chain.atoms = np.concatenate([chain.atoms, addarray])
-
-    def _add_chain_to_structure(self, chain, structure):
-        """Adds a chain object to a structure object"""
-
-        addarray = np.array([chain])
-        structure.chains = np.concatenate((structure.chains, addarray))
-
-    def _make_new_residue(self, structure, atom):
-        """Makes a new residue object"""
-
-        self.current_residue = Residue(atom.residue_name, atom.structure, atom.residue_number, atom.chain)
-        if len(self.current_chain.residues) == 0:
-            self.current_residue.terminus = "N"
-        self._add_residue_to_structure(self.current_residue, structure)
-        self.residue_numbers[atom.chain_name].append(atom.residue_number)
-        self._add_residue_to_chain(self.current_residue, self.current_chain)
-        return self.current_residue
-
-    def _add_residue_to_structure(self, residue, structure):
-        """ "adds residue to a structure"""
-
-        addarray = np.array([residue])
-        structure.residues = np.concatenate((structure.residues, addarray))
-
-    def _add_atom_to_residue(self, atom, residue):
-        """adds atom to a residue"""
-
-        addarray = np.array([atom])
-        residue.atoms = np.concatenate([residue.atoms, addarray])
-
-    def _add_residue_to_chain(self, residue, chain):
-        "adds residue to a chain"
-
-        addarray = np.array([residue])
-        chain.residues = np.concatenate([chain.residues, addarray])
+        return parse_pdb_text(read_pdb_text(path), name, identifier)
 
 
 def read_pka(file):
