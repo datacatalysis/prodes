@@ -3,6 +3,7 @@ channels:
   - conda-forge
 dependencies:
   - python=3.13.12
+  - biopython=1.88
   - numpy=2.4.6
   - pandas=3.0.3
   - python-dotenv=1.2.2

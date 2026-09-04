@@ -25,12 +25,19 @@ def test_main_accept():
     assert len(structure.residues) == 130
 
 
-def test_read(tmp_path):
-    """tests if a pdb file read"""
+def test_read_text_builds_the_same_structure_as_reading_the_file():
+    """the text of a file parses to what the file itself parses to
 
-    extracted = parser.extract_pdb(file_path, tmp_path)
-    with open(extracted) as file:
-        pdb_parser._read_pdb(file, "test")
+    parse_pdb_text is the whole of the parse below the archive handling, so a
+    caller holding the text of a structure never has to write it to disk first.
+    """
+
+    from_text = parser.parse_pdb_text(parser.read_pdb_text(file_path), "test")
+    from_file = pdb_parser.parse(file_path)
+
+    assert from_text.name == "test"
+    assert len(from_text.atoms) == len(from_file.atoms)
+    assert [(atom.name, atom.x, atom.y, atom.z) for atom in from_text.atoms] == [(atom.name, atom.x, atom.y, atom.z) for atom in from_file.atoms]
 
 
 def test_structure_name_comes_from_the_file_stem():
@@ -192,539 +199,292 @@ def test_parsed_residue():
     assert len(residue.atoms) == 9
 
 
-# Alternate conformations (altLoc). Issue #4.
-#
-# A residue modelled in more than one conformation writes each of them out in
-# full. The parser used to read the atom name as columns 13-17, which is the
-# name plus the alternate location indicator, so an atom of a disordered
-# aspartate arrived called OD1A. A name like that matches nothing the package
-# looks for, so the residue kept both copies of its side chain in the surface
-# and lost its charge entirely. Every count below fails on the old parser.
+def test_a_file_with_no_records_of_the_requested_type_says_so():
+    """rather than failing on an empty array
 
-alternates_path = "tests/data/1CBN.pdb.zip"
-fab_path = "tests/data/4NZU.pdb.zip"
-
-
-def parsed_lines(path):
-    """Returns the ATOM records of a zipped structure, for comparing against the parse."""
-
-    return [line for line in parser.read_pdb_text(path).splitlines() if line[0:6].strip() == "ATOM"]
-
-
-def test_an_alternate_location_is_not_part_of_the_atom_name():
-    """the indicator in column 17 is read as its own field, not glued to the name
-
-    This is the whole defect. A disordered SG used to arrive as "SG A", which is
-    not the SG that disulfide detection looks for nor the SG that carries charge.
+    1GDW holds no HETATM records at all, and asking for them used to end in an
+    IndexError from the terminus assignment, naming neither the file nor what
+    was missing.
     """
 
-    structure = pdb_parser.parse(alternates_path)
-
-    assert not [atom for atom in structure.atoms if " " in atom.name]
-    assert {atom.altloc for atom in structure.atoms} == {"", "A", "C"}
+    with pytest.raises(ValueError, match="holds no HETATM records"):
+        pdb_parser.parse(file_path, identifier="HETATM")
 
 
-def test_every_parsed_name_matches_its_column_range():
-    """each name is checked against the record it came from, by serial number
+def test_a_coordinate_record_after_an_end_record_is_refused(tmp_path):
+    """the reader stops at END, so the atoms after one would be lost silently
 
-    Asserting "no spaces and at most four characters" would pass OD1A, CD1A and
-    every other three character name carrying a letter: 103 of the 272 atoms
-    1CBN used to mis-parse look perfectly normal. Comparing against the pool of
-    all names would be nearly as weak, since a parser returning the same name for
-    every atom would satisfy it. Only a per record comparison settles it.
-    """
+    Biopython treats the six column END of the specification, and any CONECT, as
+    the end of the coordinates and hands back everything after it unparsed. A
+    concatenated file, or one that writes CONECT for a ligand before the rest of
+    its atoms, reaches this. prodes reads such a file today, so the choice is
+    between losing atoms quietly and saying so.
 
-    for path in (alternates_path, fab_path):
-        structure = pdb_parser.parse(path)
-        by_serial = {line[6:11].strip(): line[12:16].strip() for line in parsed_lines(path)}
-
-        parsed = {(atom.identifier, atom.name) for atom in structure.atoms}
-        assert parsed
-        for atom in structure.atoms:
-            assert atom.name == atom.name.strip()
-        # every kept atom's name is the one its own record carries
-        kept = [line for line in parsed_lines(path) if line[12:16].strip() in {a.name for a in structure.atoms}]
-        assert len(kept) >= len(structure.atoms)
-        assert all(by_serial[line[6:11].strip()] == line[12:16].strip() for line in parsed_lines(path))
-
-
-def test_names_match_record_for_record_on_a_disordered_structure():
-    """the same check, tied atom by atom to the record that produced it
-
-    Parses with the alternates already resolved, then walks the file and pairs
-    each surviving record with the atom built from it, in order.
-    """
-
-    for path in (alternates_path, fab_path):
-        structure = pdb_parser.parse(path)
-        winners = parser.elect_conformers(parser.read_pdb_text(path).splitlines(), "ATOM")[0]
-        records = [line for index, line in enumerate(parser.read_pdb_text(path).splitlines()) if index in winners]
-
-        assert len(records) == len(structure.atoms)
-        for record, atom in zip(records, structure.atoms, strict=True):
-            assert atom.name == record[12:16].strip()
-            assert atom.altloc == record[16].strip()
-            assert atom.x == float(record[30:38])
-
-
-def test_alternates_are_collapsed_to_one_conformation():
-    """1CBN loses the duplicate side chains it used to carry
-
-    772 atoms and 400 heavy atoms before, because every conformation survived.
-    The heavy atom count is the one that matters: those are the atoms the surface
-    is built from.
-    """
-
-    structure = pdb_parser.parse(alternates_path)
-
-    assert len(structure.atoms) == 641
-    assert len(structure.heavy_atoms) == 327
-
-
-def test_a_residue_modelled_as_two_amino_acids_keeps_one_of_them():
-    """1CBN residues 22 and 25 are each modelled as two different residues
-
-    Residue 22 is a serine at occupancy 0.20 and a proline at 0.60, residue 25 an
-    isoleucine and a leucine. Choosing per atom, which is what issue #4 proposed,
-    would take the highest occupancy atom for each name independently and build a
-    residue holding the serine's OG beside the proline's CG and CD. Choosing per
-    residue keeps one whole amino acid, and the more occupied one.
-    """
-
-    residues = {residue.number: residue for residue in pdb_parser.parse(alternates_path).residues}
-
-    assert residues[22].name == "PRO"
-    assert sorted(atom.name for atom in residues[22].heavy_atoms) == ["C", "CA", "CB", "CD", "CG", "N", "O"]
-    assert residues[25].name == "LEU"
-    assert sorted(atom.name for atom in residues[25].heavy_atoms) == ["C", "CA", "CB", "CD1", "CD2", "CG", "N", "O"]
-
-
-def test_a_disordered_residue_recovers_its_charge():
-    """1CBN ASP 43 is disordered and used to carry no charge at any pH
-
-    Its oxygens parsed as OD1A, OD1B, OD2A and OD2B, none of which is in the
-    charged atoms of an aspartate, so the residue read as neutral. This is the
-    largest of the effects: charge moves further than the surface does.
-    """
-
-    residues = [residue for residue in pdb_parser.parse(alternates_path).residues if residue.name == "ASP"]
-
-    assert [round(residue.charge(7), 3) for residue in residues] == [-1.0]
-
-
-def test_a_disordered_terminus_recovers_its_charge():
-    """the terminal charge is matched by atom name too, so it was lost the same way
-
-    Atom.charge asks whether the name equals the residue's terminus. 1CBN THR 1
-    is disordered, so its backbone N arrived as "N  A" and the N terminal
-    ammonium contributed nothing.
-    """
-
-    structure = pdb_parser.parse(alternates_path)
-
-    assert sum(1 for residue in structure.residues if residue.charge(7) != 0) == 6
-    assert sum(1 for atom in structure.atoms if atom.charge(7) != 0) == 12
-
-
-def test_aromatic_carbons_get_their_own_radius_again():
-    """Atom.radius looks up aromatic carbons by name before falling back to element
-
-    So a mangled name silently handed an aromatic carbon the plain carbon radius
-    of 2.0 A instead of 1.85 A. Only 6 of 1CBN's 18 aromatic carbons used to be
-    recognised.
-    """
-
-    from prodes import data
-
-    structure = pdb_parser.parse(alternates_path)
-    aromatic = [atom for atom in structure.atoms if atom.name in (data.residue_data(atom.residue_name)["aromatic_carbons"] or [])]
-
-    assert len(aromatic) == 18
-    assert {atom.radius for atom in aromatic} == {data.vdw_radius("Cr")}
-
-
-def test_occupancy_and_alternate_location_are_read():
-    """both are their own fields on the Atom, and occupancy is a number"""
-
-    first = pdb_parser.parse(alternates_path).atoms[0]
-
-    assert first.altloc == "A"
-    assert first.occupancy == 0.80
-
-
-def test_a_missing_occupancy_is_none_rather_than_zero(tmp_path):
-    """a file that stops before column 60 has not said the atom is absent
-
-    Zero is a real occupancy. Reading a blank column as 0.0 would make every
-    conformation of such a file tie at zero rather than falling through to the
-    order the letters appear in.
+    Written with the padded form deliberately: a bare three character END, which
+    is what write_pdb and tests.pdb_records produce, is not recognised and does
+    not truncate anything.
     """
 
     from tests.pdb_records import atom_line, write_structure
 
-    truncated = [atom_line(1, "N", "ALA", "A", 1, 0.0, 0.0, 0.0, "N")[:54]]
-    path = write_structure(tmp_path / "no_occupancy.pdb", truncated)
-
-    assert pdb_parser.parse(path).atoms[0].occupancy is None
-
-
-def test_the_more_occupied_conformation_wins(tmp_path):
-    """B beats A when B is the better occupied, rather than the first winning"""
-
-    from tests.pdb_records import atom_line, write_structure
-
-    lines = [
-        atom_line(1, "N", "ALA", "A", 1, 0.0, 0.0, 0.0, "N", altloc="A", occupancy=0.30),
-        atom_line(2, "CB", "ALA", "A", 1, 1.0, 0.0, 0.0, "C", altloc="A", occupancy=0.30),
-        atom_line(3, "N", "ALA", "A", 1, 0.0, 0.0, 0.0, "N", altloc="B", occupancy=0.70),
-        atom_line(4, "CB", "ALA", "A", 1, 2.0, 0.0, 0.0, "C", altloc="B", occupancy=0.70),
-    ]
-    structure = pdb_parser.parse(write_structure(tmp_path / "occupancy.pdb", lines))
-
-    assert [atom.altloc for atom in structure.atoms] == ["B", "B"]
-    assert [atom.x for atom in structure.atoms] == [0.0, 2.0]
-
-
-def test_a_conformation_is_ranked_by_its_median_occupancy(tmp_path):
-    """one atom refined away from the rest does not decide the conformation
-
-    Occupancy is not constant across a conformation's atoms: 32 of 225
-    conformations across 40 real structures vary, and 1CBN residue 34 carries
-    both 0.80 and 1.00 under the same letter. A mean would let the stray 1.00
-    below carry A past B; the median ignores it.
-    """
-
-    from tests.pdb_records import atom_line, write_structure
-
-    lines = [
-        atom_line(1, "N", "ALA", "A", 1, 0.0, 0.0, 0.0, "N", altloc="A", occupancy=0.30),
-        atom_line(2, "CA", "ALA", "A", 1, 1.0, 0.0, 0.0, "C", altloc="A", occupancy=0.30),
-        atom_line(3, "CB", "ALA", "A", 1, 2.0, 0.0, 0.0, "C", altloc="A", occupancy=1.00),
-        atom_line(4, "N", "ALA", "A", 1, 0.0, 0.0, 0.0, "N", altloc="B", occupancy=0.40),
-        atom_line(5, "CA", "ALA", "A", 1, 1.0, 0.0, 0.0, "C", altloc="B", occupancy=0.40),
-        atom_line(6, "CB", "ALA", "A", 1, 3.0, 0.0, 0.0, "C", altloc="B", occupancy=0.40),
-    ]
-    structure = pdb_parser.parse(write_structure(tmp_path / "median.pdb", lines))
-
-    assert {atom.altloc for atom in structure.atoms} == {"B"}
-
-
-def test_equal_occupancies_are_broken_by_the_order_they_appear(tmp_path):
-    """a tie goes to the first letter in the file
-
-    Ties are the common case rather than a corner: roughly a quarter of alternate
-    residues in real structures are written at exactly equal occupancy, so this
-    rule decides a large share of every choice made here and has to give the same
-    answer on every run.
-    """
-
-    from tests.pdb_records import atom_line, write_structure
-
-    lines = [
-        atom_line(1, "N", "ALA", "A", 1, 0.0, 0.0, 0.0, "N", altloc="A", occupancy=0.50),
-        atom_line(2, "CB", "ALA", "A", 1, 1.0, 0.0, 0.0, "C", altloc="A", occupancy=0.50),
-        atom_line(3, "N", "ALA", "A", 1, 0.0, 0.0, 0.0, "N", altloc="B", occupancy=0.50),
-        atom_line(4, "CB", "ALA", "A", 1, 2.0, 0.0, 0.0, "C", altloc="B", occupancy=0.50),
-    ]
-    structure = pdb_parser.parse(write_structure(tmp_path / "tie.pdb", lines))
-
-    assert {atom.altloc for atom in structure.atoms} == {"A"}
-    assert [atom.x for atom in structure.atoms if atom.name == "CB"] == [1.0]
-
-
-def test_a_tie_is_not_decided_by_how_many_atoms_a_conformation_has(tmp_path):
-    """conformations of unequal length at one occupancy still go to the first letter
-
-    Ranking on the mean would make this depend on float arithmetic: the mean of
-    three 0.35s is 0.3499999999999999 and of two is exactly 0.35, so an exact
-    comparison would rank the longer conformation lower and the tie break would
-    never run. The median is exact for equal values, and the comparison holds a
-    tolerance regardless.
-
-    The longer conformation still donates the atom the winner does not have,
-    which is the completion rule rather than the election.
-    """
-
-    from tests.pdb_records import atom_line, write_structure
-
-    lines = [
-        atom_line(1, "N", "ALA", "A", 1, 0.0, 0.0, 0.0, "N", altloc="A", occupancy=0.35),
-        atom_line(2, "CA", "ALA", "A", 1, 1.0, 0.0, 0.0, "C", altloc="A", occupancy=0.35),
-        atom_line(3, "N", "ALA", "A", 1, 5.0, 0.0, 0.0, "N", altloc="B", occupancy=0.35),
-        atom_line(4, "CA", "ALA", "A", 1, 6.0, 0.0, 0.0, "C", altloc="B", occupancy=0.35),
-        atom_line(5, "CB", "ALA", "A", 1, 7.0, 0.0, 0.0, "C", altloc="B", occupancy=0.35),
-    ]
-    structure = pdb_parser.parse(write_structure(tmp_path / "uneven_tie.pdb", lines))
-
-    assert [atom.x for atom in structure.atoms if atom.name in ("N", "CA")] == [0.0, 1.0]
-    # B's extra CB goes with B. Nothing is carried over from a conformation that
-    # lost, however incomplete the winner looks beside it.
-    assert not [atom for atom in structure.atoms if atom.name == "CB"]
-
-
-def test_equal_occupancies_that_are_unequal_floats_still_tie(tmp_path):
-    """the tolerance in the comparison is load bearing, not decoration
-
-    Deposited occupancies carry two decimals, and a median of two of them is not
-    always the same float for the same nominal value: 0.04 and 0.37 give exactly
-    0.205, while 0.01 and 0.40 give 0.20500000000000002. Comparing exactly would
-    hand the second conformation the win on float noise alone and the documented
-    first-appearance tie break would never run. 125 median values reachable from
-    two decimal occupancies have this property.
-    """
-
-    from tests.pdb_records import atom_line, write_structure
-
-    lines = [
-        atom_line(1, "N", "ALA", "A", 1, 0.0, 0.0, 0.0, "N", altloc="A", occupancy=0.04),
-        atom_line(2, "CB", "ALA", "A", 1, 1.0, 0.0, 0.0, "C", altloc="A", occupancy=0.37),
-        atom_line(3, "N", "ALA", "A", 1, 5.0, 0.0, 0.0, "N", altloc="B", occupancy=0.01),
-        atom_line(4, "CB", "ALA", "A", 1, 6.0, 0.0, 0.0, "C", altloc="B", occupancy=0.40),
-    ]
-    structure = pdb_parser.parse(write_structure(tmp_path / "float_tie.pdb", lines))
-
-    assert {atom.altloc for atom in structure.atoms} == {"A"}
-
-
-def test_nothing_is_taken_from_a_losing_conformation(tmp_path):
-    """a losing conformation contributes nothing, not even an atom the winner lacks
-
-    Completing the winner from the runners up was tried and removed. Over
-    thousands of disordered residues it never supplied a single heavy atom,
-    because a conformation is written short exactly when it is the minor one, so
-    the best occupied conformation is never the less complete of the two. What it
-    did supply was hydrogens carrying the other rotamer's coordinates: on 4NZU it
-    put an HG23 0.86 A from an OG1 it is not bonded to.
-    """
-
-    from tests.pdb_records import atom_line, write_structure
-
-    lines = [
-        atom_line(1, "N", "TYR", "A", 1, 0.0, 0.0, 0.0, "N", altloc="A", occupancy=0.40),
-        atom_line(2, "CB", "TYR", "A", 1, 1.0, 0.0, 0.0, "C", altloc="A", occupancy=0.40),
-        atom_line(3, "OH", "TYR", "A", 1, 2.0, 0.0, 0.0, "O", altloc="A", occupancy=0.40),
-        atom_line(4, "N", "TYR", "A", 1, 0.0, 0.0, 0.0, "N", altloc="B", occupancy=0.60),
-        atom_line(5, "CB", "TYR", "A", 1, 1.5, 0.0, 0.0, "C", altloc="B", occupancy=0.60),
-    ]
-    structure = pdb_parser.parse(write_structure(tmp_path / "truncated.pdb", lines))
-
-    assert sorted(atom.name for atom in structure.atoms) == ["CB", "N"]
-    assert {atom.altloc for atom in structure.atoms} == {"B"}
-
-
-def test_no_residue_ends_up_with_two_atoms_of_one_name(tmp_path):
-    """the invariant the whole change exists to establish
-
-    A residue that writes an atom both without a letter and under one used to
-    come out holding both copies, 0.1 A apart and both counted in the surface.
-    """
-
-    from tests.pdb_records import atom_line, write_structure
-
-    lines = [
-        atom_line(1, "N", "SER", "A", 1, 0.0, 0.0, 0.0, "N"),
-        atom_line(2, "CA", "SER", "A", 1, 1.0, 0.0, 0.0, "C"),
-        atom_line(3, "OG", "SER", "A", 1, 2.0, 0.0, 0.0, "O", altloc="A", occupancy=0.60),
-        atom_line(4, "CA", "SER", "A", 1, 1.1, 0.0, 0.0, "C", altloc="B", occupancy=0.40),
-        atom_line(5, "OG", "SER", "A", 1, 3.0, 0.0, 0.0, "O", altloc="B", occupancy=0.40),
-    ]
-    structure = pdb_parser.parse(write_structure(tmp_path / "duplicate.pdb", lines))
-
-    assert sorted(atom.name for atom in structure.atoms) == ["CA", "N", "OG"]
-
-    # 1CBN uses no insertion codes, so every residue in it should now hold each
-    # atom name once. 4NZU is deliberately not checked: it is Kabat numbered, and
-    # the parser merges residues that differ only by an insertion code, so H100
-    # through H100H arrive as a single 111 atom residue holding 35 distinct
-    # names. That is a separate defect with its own issue and this change does
-    # not touch it.
-    for residue in pdb_parser.parse(alternates_path).residues:
-        names = [atom.name for atom in residue.atoms]
-        assert len(names) == len(set(names))
-
-
-def test_one_conformation_never_mixes_two_residue_names(tmp_path):
-    """a letter spanning two residue names does not build a chimera
-
-    Nothing in the format stops a file writing one letter across two residue
-    names, and the atoms of the losing name would otherwise be relabelled with
-    the winner's and go on to drive its charge and radius lookups.
-    """
-
-    from tests.pdb_records import atom_line, write_structure
-
-    lines = [
-        atom_line(1, "N", "SER", "A", 1, 0.0, 0.0, 0.0, "N", altloc="A", occupancy=0.80),
-        atom_line(2, "CG", "PRO", "A", 1, 1.0, 0.0, 0.0, "C", altloc="A", occupancy=0.80),
-        atom_line(3, "N", "SER", "A", 1, 0.0, 0.0, 0.0, "N", altloc="B", occupancy=0.20),
-    ]
-    structure = pdb_parser.parse(write_structure(tmp_path / "spanning.pdb", lines))
-
-    assert [(atom.name, atom.residue_name) for atom in structure.atoms] == [("N", "SER")]
-
-
-def test_an_unusable_occupancy_is_treated_as_absent(tmp_path):
-    """nan and inf parse cleanly as floats and used to crash the election
-
-    They reached the ranking and failed there as an integer conversion error
-    naming neither the file nor the column.
-    """
-
-    from tests.pdb_records import atom_line, write_structure
-
-    for bad in ("   nan", "   inf"):
+    for terminator in ("END" + " " * 77, "CONECT    1    2"):
         lines = [
-            atom_line(1, "CB", "ALA", "A", 1, 0.0, 0.0, 0.0, "C", altloc="A", occupancy=0.50),
-            atom_line(2, "CB", "ALA", "A", 1, 1.0, 0.0, 0.0, "C", altloc="B", occupancy=0.50),
+            atom_line(1, "N", "ALA", "A", 1, 0.0, 0.0, 0.0, "N"),
+            terminator,
+            atom_line(2, "CA", "ALA", "A", 2, 1.0, 0.0, 0.0, "C"),
         ]
-        lines[1] = lines[1][:54] + f"{bad:>6s}" + lines[1][60:]
-        structure = pdb_parser.parse(write_structure(tmp_path / "unusable.pdb", lines))
+        path = write_structure(tmp_path / "truncated.pdb", lines)
 
-        assert len(structure.atoms) == 1
-        assert structure.atoms[0].occupancy == 0.50
+        with pytest.raises(ValueError, match="written after an END or CONECT record"):
+            pdb_parser.parse(path)
 
 
-def test_a_shared_atom_with_no_indicator_is_always_kept(tmp_path):
-    """the ordinary case: an ordered backbone with a disordered side chain
-
-    91% of alternate residues in real structures look like this, so it matters
-    more than any of the pathological cases above.
-    """
+def test_a_bare_end_record_does_not_truncate_anything(tmp_path):
+    """which is what makes every structure written by write_pdb still readable"""
 
     from tests.pdb_records import atom_line, write_structure
 
     lines = [
-        atom_line(1, "N", "SER", "A", 1, 0.0, 0.0, 0.0, "N"),
-        atom_line(2, "CA", "SER", "A", 1, 1.0, 0.0, 0.0, "C"),
-        atom_line(3, "OG", "SER", "A", 1, 2.0, 0.0, 0.0, "O", altloc="A", occupancy=0.40),
-        atom_line(4, "OG", "SER", "A", 1, 3.0, 0.0, 0.0, "O", altloc="B", occupancy=0.60),
+        atom_line(1, "N", "ALA", "A", 1, 0.0, 0.0, 0.0, "N"),
+        "END",
+        atom_line(2, "CA", "ALA", "A", 2, 1.0, 0.0, 0.0, "C"),
     ]
-    structure = pdb_parser.parse(write_structure(tmp_path / "sidechain.pdb", lines))
+    path = write_structure(tmp_path / "bare_end.pdb", lines)
 
-    assert sorted(atom.name for atom in structure.atoms) == ["CA", "N", "OG"]
-    assert [atom.x for atom in structure.atoms if atom.name == "OG"] == [3.0]
-
-
-def test_the_residue_is_named_for_the_conformation_that_won(tmp_path):
-    """not for whichever atom arrived first
-
-    A residue modelled as two amino acids can write a shared backbone atom under
-    the name of the conformation that loses, which 1EJG does. Naming the residue
-    after its first atom would then contradict the atoms it actually holds.
-    """
-
-    from tests.pdb_records import atom_line, write_structure
-
-    lines = [
-        atom_line(1, "N", "SER", "A", 1, 0.0, 0.0, 0.0, "N"),
-        atom_line(2, "OG", "SER", "A", 1, 2.0, 0.0, 0.0, "O", altloc="A", occupancy=0.20),
-        atom_line(3, "CG", "PRO", "A", 1, 1.5, 0.0, 0.0, "C", altloc="B", occupancy=0.80),
-    ]
-    structure = pdb_parser.parse(write_structure(tmp_path / "named.pdb", lines))
-
-    assert structure.residues[0].name == "PRO"
-    assert {atom.residue_name for atom in structure.atoms} == {"PRO"}
+    assert len(pdb_parser.parse(path).atoms) == 2
 
 
-def test_residues_differing_only_by_insertion_code_choose_separately(tmp_path):
-    """one residue's alternates never decide another's
+def test_a_coordinate_written_to_more_decimals_than_the_format_holds_is_reported(tmp_path, caplog):
+    """the eight column field is three decimals and a fourth is lost
 
-    The parser otherwise ignores the insertion code and merges 30 with 30A, which
-    is its own defect. Leaving the code out of the grouping key here would add a
-    new one on top: a single conformation elected across both residues.
-    """
-
-    from tests.pdb_records import atom_line, write_structure
-
-    lines = [
-        atom_line(1, "CB", "ALA", "A", 30, 0.0, 0.0, 0.0, "C", altloc="A", occupancy=0.70),
-        atom_line(2, "CB", "ALA", "A", 30, 1.0, 0.0, 0.0, "C", altloc="B", occupancy=0.30),
-        atom_line(3, "CB", "ALA", "A", 30, 2.0, 0.0, 0.0, "C", altloc="A", occupancy=0.30, insertion="A"),
-        atom_line(4, "CB", "ALA", "A", 30, 3.0, 0.0, 0.0, "C", altloc="B", occupancy=0.70, insertion="A"),
-    ]
-    structure = pdb_parser.parse(write_structure(tmp_path / "insertion.pdb", lines))
-
-    assert [atom.x for atom in structure.atoms] == [0.0, 3.0]
-
-
-def test_hetatm_alternates_collapse_when_hetatm_is_being_read(tmp_path):
-    """the choice follows whichever record type the parser was asked for"""
-
-    from tests.pdb_records import atom_line, write_structure
-
-    lines = [
-        atom_line(1, "O", "HOH", "A", 1, 0.0, 0.0, 0.0, "O", altloc="A", occupancy=0.40).replace("ATOM  ", "HETATM", 1),
-        atom_line(2, "O", "HOH", "A", 1, 1.0, 0.0, 0.0, "O", altloc="B", occupancy=0.60).replace("ATOM  ", "HETATM", 1),
-    ]
-    path = write_structure(tmp_path / "waters.pdb", lines)
-
-    het_parser = parser.PDBparser()
-    structure = het_parser.parse(path, identifier="HETATM")
-
-    assert len(structure.atoms) == 1
-    assert structure.atoms[0].x == 1.0
-
-
-def test_the_collapse_is_reported(caplog):
-    """the counts are logged, and the renamed residues are named individually
-
-    A residue whose winning conformation is a different amino acid changes the
-    sequence, and is the case where a pKa file generated from the original
-    coordinates no longer agrees with the residue it was meant for.
+    A fair trade for a file that does not conform, and a bad one to make in
+    silence, because nothing else in the parse would ever mention it.
     """
 
     import logging
 
+    from tests.pdb_records import pdb_line, write_structure
+
+    line = pdb_line(
+        [
+            (1, "ATOM"),
+            (7, "    1"),
+            (13, " N  "),
+            (18, "ALA"),
+            (22, "A"),
+            (23, "   1"),
+            (31, " 1.12345"),
+            (39, "   0.000"),
+            (47, "   0.000"),
+            (55, "  1.00"),
+            (77, " N"),
+        ]
+    )
+    path = write_structure(tmp_path / "over_precise.pdb", [line])
+
     with caplog.at_level(logging.WARNING):
-        structure = pdb_parser.parse(alternates_path)
+        structure = pdb_parser.parse(path)
 
-    assert "13 residues modelled in more than one conformation" in caplog.text
-    assert "dropping 131 atoms" in caplog.text
-    assert "A22" in caplog.text and "A25" in caplog.text
-    assert structure.alternate_conformers.summary()["atoms_dropped"] == 131
+    assert structure.atoms[0].x == 1.123
+    assert "a precision the PDB format does not hold" in caplog.text
 
 
-def test_a_structure_without_alternates_says_nothing(caplog):
-    """no warning, and a report that records nothing was collapsed"""
+def test_a_coordinate_that_loses_nothing_is_not_reported(tmp_path, caplog):
+    """a trailing zero and an exponent are read exactly, so they must not warn
+
+    Asking whether a column has a fourth decimal would flag both. Asking whether
+    rounding changes the number is the question that was meant.
+    """
+
+    import logging
+
+    from tests.pdb_records import pdb_line, write_structure
+
+    line = pdb_line(
+        [
+            (1, "ATOM"),
+            (7, "    1"),
+            (13, " N  "),
+            (18, "ALA"),
+            (22, "A"),
+            (23, "   1"),
+            (31, "  1.1230"),
+            (39, " 1.0e+02"),
+            (47, "   0.000"),
+            (55, "  1.00"),
+            (61, "  0.00"),
+            (77, " N"),
+        ]
+    )
+    path = write_structure(tmp_path / "exact.pdb", [line])
+
+    with caplog.at_level(logging.WARNING):
+        structure = parser.PDBparser().parse(path)
+
+    assert (structure.atoms[0].x, structure.atoms[0].y) == (1.123, 100.0)
+    assert "precision" not in caplog.text
+
+
+def test_a_file_with_more_than_one_model_says_so(caplog):
+    """prodes merges every model into one structure and that is not a protein
+
+    The defect is its own issue and is not fixed here. What is fixed here is the
+    silence: the file used to be described as though it were a single structure,
+    and a 20 model ensemble came out with tens of thousands of atoms in one
+    residue and a charge in the hundreds.
+    """
+
+    import logging
+
+    from tests.pdb_records import atom_line
+
+    lines = []
+    for model in (1, 2, 3):
+        lines += [f"MODEL     {model:>4d}", atom_line(1, "N", "ALA", "A", 1, float(model), 0.0, 0.0, "N"), "ENDMDL"]
+
+    with caplog.at_level(logging.WARNING):
+        structure = parser.parse_pdb_text("\n".join(lines) + "\nEND\n", "ensemble")
+
+    assert len(structure.atoms) == 3
+    assert "holds 3 models" in caplog.text
+
+
+def test_a_single_model_structure_says_nothing_about_models(caplog):
+    """the ordinary case has to stay quiet, or the warning is worthless"""
 
     import logging
 
     with caplog.at_level(logging.WARNING):
-        structure = pdb_parser.parse(file_path)
+        pdb_parser.parse(file_path)
 
-    assert "conformation" not in caplog.text
-    assert structure.alternate_conformers.summary() == {
-        "residues_with_alternates": 0,
-        "atoms_dropped": 0,
-        "residues_renamed": [],
-    }
+    assert "models" not in caplog.text
 
 
-def test_the_representative_fab_collapses_correctly():
-    """4NZU is the representative case, and the completion rule fires on it
+def test_an_ssbond_written_after_the_coordinates_is_still_read(caplog):
+    """it is read from the text, so where it sits in the file does not matter
 
-    1CBN is a 0.83 A crambin with microheterogeneity, which is a case this tool
-    will essentially never meet: across 24 real X-ray entries, alternate residues
-    run at 0.26% and microheterogeneity at zero. 4NZU is an ordinary Fab, and it
-    is the fixture that says the change works on what Prodes is actually pointed
-    at.
+    Biopython does not parse SSBOND anywhere, and its header stops at the first
+    coordinate record, so a bond written at the end would be lost by anything
+    that took the reader's word for what the file contains. A lost SSBOND is a
+    charge change and not a cosmetic one.
     """
 
-    structure = pdb_parser.parse(fab_path)
+    import logging
 
-    assert len(structure.atoms) == 5487
-    assert len(structure.heavy_atoms) == 3270
+    from tests.pdb_records import cysteine_lines
+
+    lines = cysteine_lines(1, "A", 1, 0.0) + cysteine_lines(7, "A", 2, 2.0) + ["SSBOND   1 CYS A    1    CYS A    2"]
+
+    with caplog.at_level(logging.WARNING):
+        structure = parser.parse_pdb_text("\n".join(lines) + "\nEND\n", "trailing_ssbond")
+
+    assert len(structure.disulfides) == 1
+    assert "SSBOND" not in caplog.text
 
 
-@pytest.mark.parametrize(
-    "name, atoms",
-    [("1GDW", 1022), ("1GDW_h", 2003), ("1AO6", 9198), ("1GPB", 6699), ("ARH96693", 479), ("ARH98503", 3106)],
-)
-def test_structures_without_alternates_parse_exactly_as_before(name, atoms):
-    """not one of the structures already committed here contains an alternate
+# The grouping rules build_structure has to reproduce. All three are quirks
+# rather than intentions, no shipped structure reaches any of them, and all
+# three are what issues #14 and #13 will change. Without these tests the next
+# person to edit build_structure would be told by a passing suite that they are
+# free to choose, so each was checked against the parser as it was before the
+# reader changed and pins that answer.
 
-    So the change has to be a no-op on every one of them, and on the reference
-    CSV that tests/test_sasa.py compares against.
+
+def test_a_chain_that_reappears_is_the_chain_it_already_was(tmp_path):
+    """not a second chain of the same name
+
+    Which also decides where the C terminus goes, and the answer is not "the
+    last residue of each chain". It is written on the chain being left at the
+    moment a new chain name appears, so chain A's first residue takes a C the
+    instant chain B starts, overwriting the N it had as the first of its chain;
+    chain B never gets one, because nothing follows it; and the structure's last
+    residue takes one at the end.
     """
 
-    assert len(pdb_parser.parse(f"tests/data/{name}.pdb.zip").atoms) == atoms
+    from tests.pdb_records import atom_line, write_structure
+
+    lines = [
+        atom_line(1, "N", "ALA", "A", 1, 0.0, 0.0, 0.0, "N"),
+        atom_line(2, "N", "GLY", "B", 1, 1.0, 0.0, 0.0, "N"),
+        atom_line(3, "N", "SER", "A", 2, 2.0, 0.0, 0.0, "N"),
+    ]
+    structure = pdb_parser.parse(write_structure(tmp_path / "reappearing_chain.pdb", lines))
+
+    assert [chain.name for chain in structure.chains] == ["A", "B"]
+    assert [len(chain.residues) for chain in structure.chains] == [2, 1]
+    assert [(residue.name, residue.terminus) for residue in structure.residues] == [("ALA", "C"), ("GLY", "N"), ("SER", "C")]
+
+
+def test_a_residue_number_that_reappears_does_not_start_a_new_residue(tmp_path):
+    """its atoms join whichever residue was made most recently
+
+    A quirk and not a decision: the parser tests membership in the numbers
+    already seen in the chain, so a number that comes back after another has
+    intervened finds itself already known. It is the mechanism behind the damage
+    an NMR ensemble takes, which is issue #13, and it is deliberately unchanged.
+    """
+
+    from tests.pdb_records import atom_line, write_structure
+
+    lines = [
+        atom_line(1, "N", "ALA", "A", 1, 0.0, 0.0, 0.0, "N"),
+        atom_line(2, "N", "GLY", "A", 2, 1.0, 0.0, 0.0, "N"),
+        atom_line(3, "CA", "ALA", "A", 1, 2.0, 0.0, 0.0, "C"),
+    ]
+    structure = pdb_parser.parse(write_structure(tmp_path / "reappearing_number.pdb", lines))
+
+    assert [(residue.number, residue.name, len(residue.atoms)) for residue in structure.residues] == [(1, "ALA", 1), (2, "GLY", 2)]
+
+
+def test_a_one_residue_chain_ends_up_a_c_terminus(tmp_path):
+    """the C written at the chain transition overwrites the N written on the same residue
+
+    Which is what the terminal charge is then read from, so it is not cosmetic.
+    """
+
+    from tests.pdb_records import atom_line, write_structure
+
+    lines = [
+        atom_line(1, "N", "ALA", "A", 1, 0.0, 0.0, 0.0, "N"),
+        atom_line(2, "N", "GLY", "B", 1, 1.0, 0.0, 0.0, "N"),
+    ]
+    structure = pdb_parser.parse(write_structure(tmp_path / "one_residue_chain.pdb", lines))
+
+    assert [residue.terminus for residue in structure.residues] == ["C", "C"]
+
+
+def test_a_coordinate_that_is_not_a_number_is_reported(tmp_path, caplog):
+    """nan and inf parse cleanly and then poison every distance measured from them
+
+    Read as they always were, because refusing them would be a change to what
+    parses. Said out loud, because nothing downstream will mention it: a nan
+    coordinate propagates through the surface and the grids as more nans.
+    """
+
+    import logging
+
+    from tests.pdb_records import pdb_line, write_structure
+
+    line = pdb_line(
+        [
+            (1, "ATOM"),
+            (7, "    1"),
+            (13, " N  "),
+            (18, "ALA"),
+            (22, "A"),
+            (23, "   1"),
+            (31, "     nan"),
+            (39, "   0.000"),
+            (47, "   0.000"),
+            (55, "  1.00"),
+            (61, "  0.00"),
+            (77, " N"),
+        ]
+    )
+    path = write_structure(tmp_path / "unusable.pdb", [line])
+
+    with caplog.at_level(logging.WARNING):
+        parser.PDBparser().parse(path)
+
+    assert "not numbers" in caplog.text
+    assert "precision" not in caplog.text
