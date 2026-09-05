@@ -72,6 +72,18 @@ Check that it worked:
     pytest                      # run the test suite
     pre-commit run --all-files  # lint and type-check the whole repository
 
+**Maintainers, one more check.** Secrets are scanned in CI by GitGuardian on every push, and blocked at the push itself by GitHub push protection. Maintainers can also catch one before it is committed at all, by installing `ggshield <https://docs.gitguardian.com/ggshield-docs/getting-started>`_ once per machine rather than once per repository:
+
+.. code-block:: text
+
+    pipx install ggshield
+    ggshield auth login           # on a server, see below
+    ggshield install -m global    # a git hook covering every repository you clone
+
+``ggshield auth login`` opens a browser and waits for the OAuth callback on localhost, so it cannot work over SSH. On a server, create a personal access token in the GitGuardian dashboard with the ``scan`` scope and hand it to ``ggshield auth login --method token``, which prompts for it and stores it. Exporting ``GITGUARDIAN_API_KEY`` skips the login entirely, which is what CI does.
+
+This is deliberately not in ``.pre-commit-config.yaml``, which everyone runs: ggshield needs a GitGuardian account, so a hook there would break the first commit of anyone who clones the repository. See `SECURITY.md <SECURITY.md>`_.
+
 Quick start
 ------------
 
@@ -697,5 +709,6 @@ Neijenhuis, T., Le Bussy, O., Geldhof, G., Klijn, M. E., & Ottens, M. (2024). Pr
 Contact, Maintenance, and Improvements
 ---------------------------------------
 
-Contributions are welcome.
+Contributions are welcome. To report a security problem rather than a bug, see `SECURITY.md <SECURITY.md>`_, which asks you not to open a public issue for it.
+
 Currently the code is maintained by `Mark Teese <https://www.linkedin.com/in/markteese//>`_ of `22DataCatalysis GmbH <https://www.datacatalysis.com/>`_. Please raise a GitHub issue or contact us via the contact page on our website if you encounter any problems or have suggestions for improvements.

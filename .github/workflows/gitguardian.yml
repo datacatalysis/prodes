@@ -1,0 +1,40 @@
+name: GitGuardian scan
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  scanning:
+    name: Secret scan (ggshield)
+    runs-on: ubuntu-latest
+
+    # Repository secrets are not exposed to a workflow triggered by a pull
+    # request from a fork, so GITGUARDIAN_API_KEY would be empty and the scan
+    # would fail on exactly the pull requests we trust least. Fork pull requests
+    # are covered by GitHub's own secret scanning and push protection instead.
+    # The internal repositories carry no such guard because they are private and
+    # cannot be forked; this repository is public.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # ggshield scans a range of commits rather than the tip, so the range
+          # has to be in the clone.
+          fetch-depth: 0
+
+      - name: Secret scan
+        uses: GitGuardian/ggshield/actions/secret@v1.54.0
+        env:
+          # Which range to scan. GitGuardian reads these rather than working it
+          # out, so a missing one silently narrows the scan to a single commit.
+          GITHUB_PUSH_BEFORE_SHA: ${{ github.event.before }}
+          GITHUB_PUSH_BASE_SHA: ${{ github.event.base }}
+          GITHUB_PULL_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
