@@ -1,5 +1,7 @@
+import numpy as np
 import pytest
 
+from prodes import data
 from prodes.io import parser
 
 file_path = "tests/data/1GDW.pdb.zip"
@@ -325,13 +327,13 @@ def test_a_coordinate_that_loses_nothing_is_not_reported(tmp_path, caplog):
     assert "precision" not in caplog.text
 
 
-def test_a_file_with_more_than_one_model_says_so(caplog):
-    """prodes merges every model into one structure and that is not a protein
+def test_only_the_first_model_of_an_ensemble_is_described(caplog):
+    """an ensemble read whole is not a protein, so one model of it is described
 
-    The defect is its own issue and is not fixed here. What is fixed here is the
-    silence: the file used to be described as though it were a single structure,
-    and a 20 model ensemble came out with tens of thousands of atoms in one
-    residue and a charge in the hundreds.
+    Every model used to be read into one structure, and because a residue number
+    that reappears does not start a new residue, the later models piled onto the
+    last residue made: 1PIT came out as 58 residues holding 17 780 atoms, 16 901
+    of them in one residue, at a formal charge of -1096.
     """
 
     import logging
@@ -345,8 +347,122 @@ def test_a_file_with_more_than_one_model_says_so(caplog):
     with caplog.at_level(logging.WARNING):
         structure = parser.parse_pdb_text("\n".join(lines) + "\nEND\n", "ensemble")
 
-    assert len(structure.atoms) == 3
+    assert [atom.x for atom in structure.atoms] == [1.0]
     assert "holds 3 models" in caplog.text
+    assert "ignoring the 2 records of the rest" in caplog.text
+
+
+def test_an_ensemble_gives_the_structure_its_first_model_alone_would(tmp_path):
+    """atom for atom, coordinates included, which is the whole claim of the fix"""
+
+    from tests.pdb_records import atom_line, write_structure
+
+    def alanine(x):
+        return [
+            atom_line(1, "N", "ALA", "A", 1, x, 0.0, 0.0, "N"),
+            atom_line(2, "CA", "ALA", "A", 1, x + 1.0, 0.0, 0.0, "C"),
+            atom_line(3, "CB", "ALA", "A", 1, x + 2.0, 0.0, 0.0, "C"),
+        ]
+
+    ensemble = []
+    for model, x in enumerate((0.0, 10.0, 20.0), start=1):
+        ensemble += [f"MODEL     {model:>4d}", *alanine(x), "ENDMDL"]
+
+    from_ensemble = pdb_parser.parse(write_structure(tmp_path / "ensemble.pdb", ensemble))
+    from_one_model = pdb_parser.parse(write_structure(tmp_path / "single.pdb", alanine(0.0)))
+
+    assert [(atom.name, atom.x, atom.y, atom.z) for atom in from_ensemble.atoms] == [(atom.name, atom.x, atom.y, atom.z) for atom in from_one_model.atoms]
+    assert [(residue.name, residue.number, len(residue.atoms)) for residue in from_ensemble.residues] == [("ALA", 1, 3)]
+
+
+def test_the_model_is_chosen_before_the_conformation_is(tmp_path):
+    """or a discarded model's occupancies decide which conformation of model 1 is kept
+
+    The election keys residues on chain, number and insertion code and carries
+    no model, so every model's letters go into one ballot if they reach it
+    together. Here model 1 writes A at 0.60 against B at 0.40 and model 2 the
+    other way round by a wider margin: electing first keeps B, which is not
+    even model 1's better conformation and sits at model 2's coordinates.
+    """
+
+    from tests.pdb_records import atom_line, write_structure
+
+    def residue(x, a_occupancy, b_occupancy):
+        return [
+            atom_line(1, "N", "SER", "A", 1, x, 0.0, 0.0, "N"),
+            atom_line(2, "OG", "SER", "A", 1, x + 1.0, 0.0, 0.0, "O", altloc="A", occupancy=a_occupancy),
+            atom_line(3, "OG", "SER", "A", 1, x + 2.0, 0.0, 0.0, "O", altloc="B", occupancy=b_occupancy),
+        ]
+
+    lines = ["MODEL        1", *residue(0.0, 0.60, 0.40), "ENDMDL", "MODEL        2", *residue(10.0, 0.10, 0.90), "ENDMDL"]
+    structure = pdb_parser.parse(write_structure(tmp_path / "ordering.pdb", lines))
+
+    assert [(atom.name, atom.altloc, atom.x) for atom in structure.atoms] == [("N", "", 0.0), ("OG", "A", 1.0)]
+
+
+def test_the_run_record_gets_the_model_count_from_the_parse():
+    """the count has to survive the whole way, or every ensemble bundle claims to be one structure
+
+    The bundle ships the input file unchanged, so a record saying one model when
+    the file holds twenty is the one statement nothing else in the bundle can
+    contradict.
+    """
+
+    from prodes.output import run_metadata
+
+    structure = pdb_parser.parse("tests/data/1PIT.pdb.zip")
+    record = run_metadata("1PIT.pdb.zip", {}, 0, np.array([]), models=structure.models)
+
+    assert structure.models == 20
+    assert record["models_in_file"] == 20
+
+
+def test_a_single_model_structure_records_one_model():
+    """the ordinary case, which is what makes the count above worth reading"""
+
+    assert pdb_parser.parse(file_path).models == 1
+
+
+def test_the_first_model_holding_records_of_the_requested_type_is_the_one_kept(tmp_path):
+    """not model 1 outright, or a file whose ligand appears later holds nothing to describe"""
+
+    from tests.pdb_records import atom_line, pdb_line, write_structure
+
+    def water(serial, model):
+        return pdb_line(
+            [
+                (1, "HETATM"),
+                (7, f"{serial:5d}"),
+                (13, " O  "),
+                (18, "HOH"),
+                (22, "A"),
+                (23, f"{model:4d}"),
+                (31, f"{float(model):8.3f}"),
+                (39, "   0.000"),
+                (47, "   0.000"),
+                (55, "  1.00"),
+                (61, "  0.00"),
+                (77, " O"),
+            ]
+        )
+
+    lines = [
+        "MODEL        1",
+        atom_line(1, "N", "ALA", "A", 1, 0.0, 0.0, 0.0, "N"),
+        "ENDMDL",
+        "MODEL        2",
+        atom_line(2, "N", "ALA", "A", 1, 1.0, 0.0, 0.0, "N"),
+        water(3, 2),
+        "ENDMDL",
+        "MODEL        3",
+        atom_line(4, "N", "ALA", "A", 1, 2.0, 0.0, 0.0, "N"),
+        water(5, 3),
+        "ENDMDL",
+    ]
+    path = write_structure(tmp_path / "late_ligand.pdb", lines)
+
+    assert [atom.x for atom in pdb_parser.parse(path).atoms] == [0.0]
+    assert [atom.x for atom in pdb_parser.parse(path, identifier="HETATM").atoms] == [2.0]
 
 
 def test_a_single_model_structure_says_nothing_about_models(caplog):
@@ -382,12 +498,146 @@ def test_an_ssbond_written_after_the_coordinates_is_still_read(caplog):
     assert "SSBOND" not in caplog.text
 
 
-# The grouping rules build_structure has to reproduce. All three are quirks
-# rather than intentions, no shipped structure reaches any of them, and all
-# three are what issues #14 and #13 will change. Without these tests the next
-# person to edit build_structure would be told by a passing suite that they are
-# free to choose, so each was checked against the parser as it was before the
-# reader changed and pins that answer.
+# What a residue is, which from version 8.0 is its chain, its number and its
+# insertion code. Until then the code was left out and H100 and H100A were read
+# as one residue carrying both side chains.
+
+
+def test_the_fab_keeps_its_kabat_insertions_apart():
+    """4NZU is the real case, and it is an ordinary therapeutic antibody
+
+    Three of its residue numbers carry insertion codes, H100 running to H100H,
+    and reading each set as one residue lost 12 residues of the 434 the file
+    holds and 1.3 kDa of its mass. Kabat and Chothia numbering write every CDR
+    insertion this way, so this is the common case for the structures prodes is
+    aimed at rather than a corner of the format.
+    """
+
+    structure = pdb_parser.parse("tests/data/4NZU.pdb.zip")
+    insertions = [residue.label for residue in structure.residues if residue.insertion_code]
+
+    assert len(structure.residues) == 434
+    assert structure.mw == pytest.approx(46409.70)
+    assert insertions == ["H52A", "H82A", "H82B", "H82C", "H100A", "H100B", "H100C", "H100D", "H100E", "H100F", "H100G", "H100H"]
+
+
+def test_the_nmr_ensemble_is_described_by_its_first_model():
+    """1PIT is bovine pancreatic trypsin inhibitor, 20 models of 58 residues
+
+    Read whole it came out as 58 residues holding 17 780 atoms, 16 901 of them
+    piled into one residue, with a formal charge of -1096 at pH 7 for a protein
+    whose real charge there is about +6. One model gives 889 atoms and that +6.
+    """
+
+    structure = pdb_parser.parse("tests/data/1PIT.pdb.zip")
+
+    assert len(structure.residues) == 58
+    assert len(structure.atoms) == 889
+    assert max(len(residue.atoms) for residue in structure.residues) == 24
+    assert structure.charge(7) == pytest.approx(6.0)
+
+
+def test_residues_differing_only_by_an_insertion_code_are_separate_residues(tmp_path):
+    """H100 and H100A are two residues, and reading them as one is wrong in four ways at once
+
+    The merged residue had one name for two residues, so its mass and its
+    surface normalisation were wrong; one set of pKas, so every charged atom of
+    the second residue titrated against the first residue's group; and one
+    residue name, so a cysteine hidden inside a residue named something else was
+    invisible to the disulfide detection.
+    """
+
+    from tests.pdb_records import atom_line, write_structure
+
+    lines = [
+        atom_line(1, "N", "ASP", "H", 100, 0.0, 0.0, 0.0, "N"),
+        atom_line(2, "CA", "ASP", "H", 100, 1.0, 0.0, 0.0, "C"),
+        atom_line(3, "N", "LYS", "H", 100, 2.0, 0.0, 0.0, "N", insertion="A"),
+        atom_line(4, "NZ", "LYS", "H", 100, 3.0, 0.0, 0.0, "N", insertion="A"),
+    ]
+    structure = pdb_parser.parse(write_structure(tmp_path / "insertion.pdb", lines))
+
+    assert [(residue.name, residue.number, residue.insertion_code, len(residue.atoms)) for residue in structure.residues] == [
+        ("ASP", 100, "", 2),
+        ("LYS", 100, "A", 2),
+    ]
+    assert [residue.label for residue in structure.residues] == ["H100", "H100A"]
+
+
+def test_an_insertion_takes_its_charge_from_its_own_pka(tmp_path):
+    """the merge did not only mislabel the residue, it titrated its atoms against the wrong group
+
+    An atom keeps the residue name from its own record, so a lysine NZ merged
+    into a residue named ASP was still recognised as chargeable and then given
+    aspartate's pKa of 3.86: at pH 7 it lost its +1 entirely. The equivalent
+    cysteine came out at a full -1.
+    """
+
+    from tests.pdb_records import atom_line, write_structure
+
+    lines = [
+        atom_line(1, "N", "ASP", "H", 100, 0.0, 0.0, 0.0, "N"),
+        atom_line(2, "OD1", "ASP", "H", 100, 1.0, 0.0, 0.0, "O"),
+        atom_line(3, "OD2", "ASP", "H", 100, 2.0, 0.0, 0.0, "O"),
+        atom_line(4, "N", "LYS", "H", 100, 3.0, 0.0, 0.0, "N", insertion="A"),
+        atom_line(5, "NZ", "LYS", "H", 100, 4.0, 0.0, 0.0, "N", insertion="A"),
+    ]
+    structure = pdb_parser.parse(write_structure(tmp_path / "insertion_charge.pdb", lines))
+
+    lysine = structure.residues[1]
+
+    assert lysine.side_chain_pka == data.residue_data("LYS")["pka"]
+    assert lysine.charge(7) == pytest.approx(1.0)
+
+
+def test_write_pdb_round_trips_an_insertion_code(tmp_path):
+    """column 27 is part of which residue an atom belongs to
+
+    A writer that dropped it would hand back a file whose two residues are one
+    again, which is the defect this release fixes arriving by another route.
+    """
+
+    from tests.pdb_records import atom_line, write_structure
+
+    lines = [
+        atom_line(1, "N", "ASP", "H", 100, 0.0, 0.0, 0.0, "N"),
+        atom_line(2, "N", "ALA", "H", 100, 1.0, 0.0, 0.0, "N", insertion="A"),
+        atom_line(3, "N", "GLY", "H", 100, 2.0, 0.0, 0.0, "N", insertion="B"),
+    ]
+    structure = pdb_parser.parse(write_structure(tmp_path / "insertion_source.pdb", lines))
+
+    written = tmp_path / "insertion_round_trip.pdb"
+    parser.write_pdb(structure, str(written))
+    reparsed = pdb_parser.parse(str(written))
+
+    assert [(residue.name, residue.number, residue.insertion_code) for residue in reparsed.residues] == [
+        (residue.name, residue.number, residue.insertion_code) for residue in structure.residues
+    ]
+
+
+def test_write_pdb_leaves_column_27_blank_when_there_is_no_insertion_code(tmp_path):
+    """which is every atom of almost every structure, and the dummy surface points
+
+    Checked on the columns rather than by reparsing, because a code written into
+    the wrong column would shift the coordinates and be caught somewhere else,
+    while a stray character in the right one would not be caught at all.
+    """
+
+    structure = pdb_parser.parse(file_path)
+    written = tmp_path / "no_insertion.pdb"
+
+    parser.write_pdb(structure, str(written))
+    coordinates = [line for line in written.read_text().splitlines() if line.startswith(("ATOM", "HETATM"))]
+
+    assert coordinates
+    assert {line[26] for line in coordinates} == {" "}
+
+
+# The grouping rules build_structure has to reproduce. Both are quirks rather
+# than intentions and no shipped structure reaches either. Without these tests
+# the next person to edit build_structure would be told by a passing suite that
+# they are free to choose, so each was checked against the parser as it was
+# before the reader changed and pins that answer.
 
 
 def test_a_chain_that_reappears_is_the_chain_it_already_was(tmp_path):
@@ -415,13 +665,15 @@ def test_a_chain_that_reappears_is_the_chain_it_already_was(tmp_path):
     assert [(residue.name, residue.terminus) for residue in structure.residues] == [("ALA", "C"), ("GLY", "N"), ("SER", "C")]
 
 
-def test_a_residue_number_that_reappears_does_not_start_a_new_residue(tmp_path):
+def test_a_residue_key_that_reappears_does_not_start_a_new_residue(tmp_path):
     """its atoms join whichever residue was made most recently
 
-    A quirk and not a decision: the parser tests membership in the numbers
-    already seen in the chain, so a number that comes back after another has
-    intervened finds itself already known. It is the mechanism behind the damage
-    an NMR ensemble takes, which is issue #13, and it is deliberately unchanged.
+    A quirk and not a decision: the parser tests membership in the keys already
+    seen in the chain, so a key that comes back after another has intervened
+    finds itself already known. It was the mechanism behind the damage an NMR
+    ensemble took, and selecting one model has put that out of reach rather than
+    changing this, so a file that writes one residue's atoms in two places still
+    reaches it.
     """
 
     from tests.pdb_records import atom_line, write_structure

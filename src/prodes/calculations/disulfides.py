@@ -30,6 +30,8 @@ import logging
 
 import numpy as np
 
+from prodes.core.residue import residue_label as format_residue_label
+
 logger = logging.getLogger(__name__)
 
 # The longest SG-SG separation still called a bond. PROPKA 3.5.1 and PDB2PQR
@@ -59,10 +61,11 @@ IDENTITY_SYMMETRY_OPERATOR = "1555"
 def cysteine_sulfurs(structure):
     """Returns the SG atom of every CYS residue, in parse order.
 
-    A residue with more than one SG is reported and contributes its first: that
-    is the visible symptom of the parser merging two residues that differ only
-    by an insertion code, which is a separate defect and makes the charge of that
-    residue wrong whatever this module does.
+    A residue with more than one SG is reported and contributes its first. Until
+    version 8.0 that was the visible symptom of two residues differing only by
+    an insertion code being read as one, which is now fixed; what is left is a
+    file that writes one residue's atoms in two places, and a residue assembled
+    that way has a charge this module cannot make right.
     """
 
     sulfurs = []
@@ -83,11 +86,26 @@ def cysteine_sulfurs(structure):
 
 
 def residue_label(residue):
-    """Returns a short readable name for a residue, such as 'CYS A30'."""
+    """Returns a short readable name for a residue, such as 'CYS A30' or 'CYS H100C'.
 
-    chain = residue.chain.name if residue.chain is not None else ""
+    The insertion code is part of it because it is part of the residue's
+    identity: 4NZU has a CYS H100C three residues along from an ASP H100, and a
+    warning that named either of them H100 would be describing both.
+    """
 
-    return f"{residue.name} {chain}{residue.number}"
+    return f"{residue.name} {residue.label}"
+
+
+def record_label(key):
+    """Returns the residue an SSBOND record names, as it reads in a warning.
+
+    Formatted from the record's own columns rather than from a residue, because
+    the case this is used in is the one where no residue of that name was found,
+    but formatted by the same function, so the name in the complaint is the name
+    the file would have had to write.
+    """
+
+    return format_residue_label(*key)
 
 
 def sulfur_distance(first, second):
@@ -149,10 +167,10 @@ def geometric_disulfides(sulfurs):
     return bonds
 
 
-def residues_by_chain_and_number(structure):
-    """Returns {(chain name, residue number): residue}, which is how SSBOND records name residues."""
+def residues_by_identity(structure):
+    """Returns {(chain name, residue number, insertion code): residue}, which is how SSBOND records name residues."""
 
-    return {(residue.chain.name if residue.chain is not None else "", residue.number): residue for residue in structure.residues}
+    return {(residue.chain.name if residue.chain is not None else "", residue.number, residue.insertion_code): residue for residue in structure.residues}
 
 
 def record_disulfides(structure, records):
@@ -168,32 +186,31 @@ def record_disulfides(structure, records):
 
     Args:
         structure: the parsed Structure.
-        records: tuples of (chain1, number1, chain2, number2, sym1, sym2), as
-            read by prodes.io.parser.read_ssbond_line.
+        records: tuples of (residue1, residue2, sym1, sym2), where each residue
+            is a (chain, number, insertion code) triple, as read by
+            prodes.io.parser.read_ssbond_line.
     """
 
-    residues = residues_by_chain_and_number(structure)
+    residues = residues_by_identity(structure)
 
     bonds = []
     claimed = set()
-    for chain1, number1, chain2, number2, symmetry1, symmetry2 in records:
+    for first_key, second_key, symmetry1, symmetry2 in records:
         if symmetry1 != IDENTITY_SYMMETRY_OPERATOR or symmetry2 != IDENTITY_SYMMETRY_OPERATOR:
             # One partner sits in a neighbouring asymmetric unit, so the bond is
             # between two crystallographic copies and not inside this molecule.
             logger.debug("skipping an SSBOND record under symmetry operators %s and %s, which is a crystal contact", symmetry1, symmetry2)
             continue
 
-        if (chain1, number1) == (chain2, number2):
+        if first_key == second_key:
             continue
 
-        first, second = residues.get((chain1, number1)), residues.get((chain2, number2))
+        first, second = residues.get(first_key), residues.get(second_key)
         if first is None or second is None or first.name != "CYS" or second.name != "CYS":
             logger.warning(
-                "an SSBOND record joins %s%s to %s%s, which are not both cysteines in this file; ignoring it",
-                chain1,
-                number1,
-                chain2,
-                number2,
+                "an SSBOND record joins %s to %s, which are not both cysteines in this file; ignoring it",
+                record_label(first_key),
+                record_label(second_key),
             )
             continue
 

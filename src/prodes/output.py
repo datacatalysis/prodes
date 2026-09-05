@@ -86,7 +86,10 @@ WHAT IS IN HERE
                                    B factor column
   {name}.pdb                       the structure this run was given
   prodes_run.json                  version, settings, time of the run, and
-                                   how many disulfide bonds were found
+                                   what the structure was read as: how many
+                                   disulfide bonds were found, how many
+                                   alternate conformations were collapsed, and
+                                   how many models the file held
 
 The point clouds and the features come out of the same calculation, so a picture
 here can never disagree with a number in the feature table.
@@ -120,7 +123,7 @@ def prodes_version():
         return "unknown"
 
 
-def run_metadata(pdb_file, settings, n_points, ep, disulfides=0, alternate_conformers=None):
+def run_metadata(pdb_file, settings, n_points, ep, disulfides=0, alternate_conformers=None, models=1):
     """Returns the record of what was run, written into every bundle.
 
     The disulfide count is here rather than in the feature table because it
@@ -132,6 +135,10 @@ def run_metadata(pdb_file, settings, n_points, ep, disulfides=0, alternate_confo
     more: the bundle ships the input file unchanged, so its structure still holds
     every conformation while the features describe only one. Without this record
     there is nothing to say which conformation was described.
+
+    The model count is the same case again. An NMR file holds 20 structures and
+    the features describe the first of them, which is a fact about the numbers
+    that the shipped file, holding all 20, does not carry on its own.
     """
 
     return {
@@ -141,6 +148,7 @@ def run_metadata(pdb_file, settings, n_points, ep, disulfides=0, alternate_confo
         "settings": settings,
         "disulfides": int(disulfides),
         "alternate_conformers": alternate_conformers or {},
+        "models_in_file": int(models),
         "surface_points": int(n_points),
         "ep_min_volts": round(float(ep.min()), 3) if n_points else None,
         "ep_max_volts": round(float(ep.max()), 3) if n_points else None,

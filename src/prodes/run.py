@@ -560,6 +560,7 @@ def calculate(
         ep,
         disulfides=len(structure.disulfides),
         alternate_conformers=structure.alternate_conformers.summary() if structure.alternate_conformers else None,
+        models=structure.models,
     )
 
     return write_bundle(out_file, structure.name, calculated_features, coords, ep, lipo, pdb_file, metadata, hydro_scale)

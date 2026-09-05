@@ -24,6 +24,11 @@ class Structure:
         # a prodes.io.conformers.AlternateConformerReport. None for a structure that
         # was not read from a file, which has no conformations to collapse.
         self.alternate_conformers = None
+        # How many models the file held, counted over the record type this
+        # structure was built from. The structure describes the first of them,
+        # and the bundle ships the file unchanged, so this is what says that the
+        # features describe one member of an ensemble.
+        self.models = 1
 
     def _compute_centroid(self):
         coords = np.array([[a.x, a.y, a.z] for a in self.heavy_atoms])
@@ -243,6 +248,15 @@ class Structure:
         Groups the file leaves out are counted and reported. They keep the
         textbook value for their residue type, which is usually not what the
         absence was meant to convey.
+
+        The key is the residue number alone, so a value predicted for one chain
+        is offered to every chain, and from version 8.0, in which residues that
+        differ only by an insertion code stopped being read as one, to every
+        insertion of that number as well. Where the residue types differ the
+        value has nowhere to go and is dropped rather than misapplied, which is
+        why this is quieter than it sounds; where they match it is applied to
+        both. That is issue #12, and fixing it means keying the pKa file format
+        itself on the chain, which is not done here.
         """
 
         from prodes.io.pka_converter import PROPKA_NOT_TITRATABLE
@@ -260,16 +274,16 @@ class Structure:
                             logger.info(
                                 "the pKa file gives %s %s a pKa of %s, but it is bonded into a disulfide and cannot titrate; ignoring the predicted value",
                                 residue.name,
-                                residue.number,
+                                residue.label,
                                 pka,
                             )
 
                     else:
-                        logger.warning("the pKa file gives %s %s a %s pKa, which that residue does not have; ignoring it", residue.name, residue.number, key)
+                        logger.warning("the pKa file gives %s %s a %s pKa, which that residue does not have; ignoring it", residue.name, residue.label, key)
 
         missing = [(residue, key) for residue, key in self.titratable_groups() if (id(residue), key) not in applied]
         if missing:
-            named = ", ".join(f"{key} {residue.number}" for residue, key in missing[:5])
+            named = ", ".join(f"{key} {residue.label}" for residue, key in missing[:5])
             logger.warning(
                 "%d titratable groups are not in the pKa file and keep the textbook value for their residue type: %s%s",
                 len(missing),

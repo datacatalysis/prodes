@@ -39,11 +39,13 @@ from prodes.calculations.disulfides import (
     candidate_pairs,
     cysteine_sulfurs,
     geometric_disulfides,
+    residue_label,
 )
 from prodes.io.parser import PDBparser, read_ssbond_line
 from tests.pdb_records import atom_line, cysteine_lines, pdb_line  # noqa: F401
 
 LYSOZYME = "tests/data/1GDW.pdb.zip"
+FAB = "tests/data/4NZU.pdb.zip"
 PHOSPHORYLASE = "tests/data/1GPB.pdb.zip"
 ALBUMIN = "tests/data/1AO6.pdb.zip"
 
@@ -55,7 +57,11 @@ def parsed(path):
 
 
 def residues_by_chain_and_number(structure):
-    """Returns {(chain, number): residue}, which is how a PDB file names a residue."""
+    """Returns {(chain, number): residue}, for structures whose residues have no insertion codes.
+
+    Every fixture reached through this has none, so the number alone names a
+    residue in them. 4NZU does not and is looked up by label instead.
+    """
 
     return {(residue.chain.name, residue.number): residue for residue in structure.residues}
 
@@ -86,8 +92,12 @@ def write_cysteine_structure(path, sulfur_positions, records=()):
     return str(path)
 
 
-def ssbond_line(chain1, number1, chain2, number2, symmetry1="1555", symmetry2="1555"):
-    """Returns one SSBOND record in the column layout the format specifies."""
+def ssbond_line(chain1, number1, chain2, number2, symmetry1="1555", symmetry2="1555", insertion1="", insertion2=""):
+    """Returns one SSBOND record in the column layout the format specifies.
+
+    Columns 22 and 36 are the insertion codes, which name a residue as much as
+    the number does.
+    """
 
     return pdb_line(
         [
@@ -96,9 +106,11 @@ def ssbond_line(chain1, number1, chain2, number2, symmetry1="1555", symmetry2="1
             (12, "CYS"),
             (16, chain1),
             (18, f"{number1:4d}"),
+            (22, insertion1),
             (26, "CYS"),
             (30, chain2),
             (32, f"{number2:4d}"),
+            (36, insertion2),
             (60, f"{symmetry1:>6s}"),
             (67, f"{symmetry2:>6s}"),
             (74, " 2.03"),
@@ -114,7 +126,7 @@ def test_read_ssbond_line_reads_a_real_record():
 
     line = "SSBOND   1 CYS A    6    CYS A  128                          1555   1555  2.03  "
 
-    assert read_ssbond_line(line) == ("A", 6, "A", 128, "1555", "1555")
+    assert read_ssbond_line(line) == (("A", 6, ""), ("A", 128, ""), "1555", "1555")
 
 
 def test_read_ssbond_line_keeps_a_symmetry_operator():
@@ -122,15 +134,36 @@ def test_read_ssbond_line_keeps_a_symmetry_operator():
 
     line = "SSBOND   1 CYS A   73    CYS A   73                          2655   1555  2.05  "
 
-    assert read_ssbond_line(line) == ("A", 73, "A", 73, "2655", "1555")
+    assert read_ssbond_line(line) == (("A", 73, ""), ("A", 73, ""), "2655", "1555")
 
 
 def test_read_ssbond_line_treats_a_truncated_line_as_the_identity_operator():
-    """Trimmed and hand-written files stop before column 72, and must not lose their bonds."""
+    """Trimmed and hand-written files stop before column 72, and must not lose their bonds.
+
+    The line below is 35 characters, so column 36, the second insertion code,
+    is past its end as well. Both are read by slice rather than by index for
+    that reason: a record that stops after the residue number has not said the
+    code is blank, but blank is the only thing the missing column can mean, and
+    raising on it would cost the bond.
+    """
 
     line = "SSBOND   1 CYS A    6    CYS A  128"
 
-    assert read_ssbond_line(line) == ("A", 6, "A", 128, "1555", "1555")
+    assert read_ssbond_line(line) == (("A", 6, ""), ("A", 128, ""), "1555", "1555")
+
+
+def test_read_ssbond_line_reads_the_insertion_codes():
+    """4NZU's fourth record joins H98 to H100C, and columns 22 and 36 are what say so
+
+    Without them the record names H100, which after the version 8.0 residue
+    identity is a different residue three positions away and not a cysteine, so
+    the bond would be discarded and both of its cysteines titrated as free
+    thiols.
+    """
+
+    line = "SSBOND   4 CYS H   98    CYS H  100C                         1555   1555  2.03  "
+
+    assert read_ssbond_line(line) == (("H", 98, ""), ("H", 100, "C"), "1555", "1555")
 
 
 def test_read_ssbond_line_returns_none_for_a_line_it_cannot_read():
@@ -441,11 +474,11 @@ def test_a_second_record_claiming_the_same_cysteine_is_refused(tmp_path, caplog)
 
 
 def test_a_residue_with_two_sg_atoms_is_reported_and_counted_once(tmp_path, caplog):
-    """Two residues sharing a number are merged by the parser, which this must survive.
+    """Two residues written under one identity are merged by the parser, which this must survive.
 
-    The merge is a separate defect, of insertion code handling, and it makes the
-    residue's charge wrong however this module behaves. What it must not do is
-    let one residue take two partners.
+    A file that writes one residue's atoms in two places still reaches the
+    merge, and it makes the residue's charge wrong however this module behaves.
+    What it must not do is let one residue take two partners.
     """
 
     lines = cysteine_lines(1, "A", 1, 0.0) + cysteine_lines(7, "A", 1, 2.05) + cysteine_lines(13, "A", 2, 4.10)
@@ -458,6 +491,53 @@ def test_a_residue_with_two_sg_atoms_is_reported_and_counted_once(tmp_path, capl
     assert "carries 2 SG atoms" in caplog.text
     assert len(cysteine_sulfurs(structure)) == 2
     assert len(structure.disulfides) <= 1
+
+
+def test_a_record_naming_an_insertion_finds_it(tmp_path, caplog):
+    """the record names H100C, and only column 36 tells it from H100
+
+    Until version 8.0 every H100x was read as one residue named after the first
+    of them, so this record found no cysteine at H100, was discarded, and both
+    of its cysteines went on to titrate as free thiols: the charge distortion
+    issue #6 exists to prevent, arriving by way of residue identity.
+    """
+
+    records = [ssbond_line("H", 98, "H", 100, insertion2="C")]
+    lines = list(records)
+    lines += cysteine_lines(1, "H", 98, 0.0)
+    lines += [atom_line(7, "N", "ASP", "H", 100, 20.0, 0.0, 0.0, "N")]
+    lines += cysteine_lines(8, "H", 100, 2.05, insertion="C")
+    path = tmp_path / "insertion_record.pdb"
+    path.write_text("\n".join(lines) + "\nEND\n")
+
+    with caplog.at_level(logging.WARNING):
+        structure = parsed(str(path))
+
+    assert [(first.label, second.label) for first, second in structure.disulfides] == [("H98", "H100C")]
+    assert "not both cysteines" not in caplog.text
+
+
+def test_the_fab_gains_the_disulfide_its_insertion_code_used_to_hide():
+    """4NZU deposits five SSBOND records and four bonds were found
+
+    The fifth joins H98 to H100C. H100C is a cysteine merged into a residue
+    named ASP, and cysteine_sulfurs skips anything not named CYS, so the record
+    resolved to nothing and was dropped with a warning about the file.
+    """
+
+    structure = parsed(FAB)
+
+    assert len(structure.disulfides) == 5
+    assert ("H98", "H100C") in {(first.label, second.label) for first, second in structure.disulfides}
+
+
+def test_the_fab_names_its_insertions_apart_in_a_warning():
+    """a message reading H100 would be describing nine residues at once"""
+
+    labels = {residue_label(residue) for residue in parsed(FAB).residues}
+
+    assert "CYS H100C" in labels
+    assert "ASP H100" in labels
 
 
 def test_a_record_works_when_the_file_gives_no_chain_id(tmp_path):

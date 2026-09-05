@@ -396,3 +396,15 @@ def test_the_run_record_carries_the_disulfide_count():
     record = run_metadata("structure.pdb", {}, 10, np.array([0.0, 1.0]), disulfides=17)
 
     assert record["disulfides"] == 17
+
+
+def test_the_run_record_says_how_many_models_the_file_held():
+    """the bundle ships the file unchanged, so its 20 models outlive the run that read one
+
+    A record whose features describe model 1 of 20 looks exactly like one that
+    describes a crystal structure, and the difference is not recoverable from
+    the shipped file.
+    """
+
+    assert run_metadata("structure.pdb", {}, 10, np.array([0.0, 1.0]))["models_in_file"] == 1
+    assert run_metadata("structure.pdb", {}, 10, np.array([0.0, 1.0]), models=20)["models_in_file"] == 20

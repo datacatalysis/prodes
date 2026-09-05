@@ -52,7 +52,7 @@ def atom_line(serial, name, residue_name, chain, number, x, y, z, element, altlo
     )
 
 
-def cysteine_lines(serial, chain, number, x, altloc="", occupancy=1.00):
+def cysteine_lines(serial, chain, number, x, altloc="", occupancy=1.00, insertion=""):
     """Returns the six heavy atoms of one cysteine, placed with its SG at x.
 
     The other atoms only have to be somewhere sensible: nothing under test reads
@@ -70,7 +70,7 @@ def cysteine_lines(serial, chain, number, x, altloc="", occupancy=1.00):
     ]
 
     return [
-        atom_line(serial + offset, name, "CYS", chain, number, at_x, at_y, at_z, element, altloc=altloc, occupancy=occupancy)
+        atom_line(serial + offset, name, "CYS", chain, number, at_x, at_y, at_z, element, altloc=altloc, occupancy=occupancy, insertion=insertion)
         for offset, (name, at_x, at_y, at_z, element) in enumerate(atoms)
     ]
 

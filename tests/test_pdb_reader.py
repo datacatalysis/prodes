@@ -14,7 +14,7 @@ from prodes.io.parser import read_pdb_text
 from prodes.io.pdb_reader import raised_inside_prodes, read_atom_records, readable_occupancy
 from tests.pdb_records import atom_line, write_structure
 
-STRUCTURES = ["1GDW", "1GDW_h", "1CBN", "1AO6", "1GPB", "4NZU", "ARH96693", "ARH98503"]
+STRUCTURES = ["1GDW", "1GDW_h", "1CBN", "1AO6", "1GPB", "4NZU", "1PIT", "ARH96693", "ARH98503"]
 
 
 def coordinate_lines(text):
@@ -180,8 +180,9 @@ def test_the_hetero_flag_becomes_the_record_type(tmp_path):
 def test_insertion_codes_are_read_as_their_own_field(tmp_path):
     """which the old reader never carried on an atom at all
 
-    Not used to group residues yet: 4NZU's Kabat insertions still merge, which
-    is its own issue. Carried so that fixing it is a change to one grouping key.
+    Two thirds of a residue's identity from version 8.0, where H100 and H100A
+    are two residues. The reader's job is only to hand the column over as its
+    own field; what is done with it is build_structure's.
     """
 
     lines = [
@@ -196,13 +197,14 @@ def test_insertion_codes_are_read_as_their_own_field(tmp_path):
 
 
 def test_every_model_is_read_and_tagged_with_its_own_number(tmp_path):
-    """an NMR ensemble is still read whole, which is the behaviour that has to hold
+    """the reader hands over every model, and the parser is what selects one
 
-    prodes has no notion of a model and merges them all, which is its own issue.
-    The number is carried so that fixing it is a filter rather than a rewrite.
-    It counts models rather than repeating the serial the MODEL record carries,
-    because nothing stops a file writing one serial twice and a key that can
-    collide is not a key.
+    Reading the whole file is what makes the record count check possible: a file
+    is compared against its own coordinate lines before anything is dropped, so
+    a model selected here rather than in the parser would look like records
+    going missing. The number counts models rather than repeating the serial the
+    MODEL record carries, because nothing stops a file writing one serial twice
+    and a key that can collide is not a key.
     """
 
     lines = [
