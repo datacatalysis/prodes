@@ -14,6 +14,8 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from statistics import median
 
+from prodes.core.residue import residue_label as format_residue_label
+
 logger = logging.getLogger(__name__)
 
 # Ranks a conformation whose file gives no occupancy at all. Below zero so that
@@ -54,23 +56,26 @@ def residue_label(key):
     """Returns a residue key as it is written in a warning, for example A22 or H100A.
 
     The key holds a parsed residue number rather than the raw columns, so the
-    number is formatted here rather than stripped. Doing it in one place keeps
-    the run record and the log agreeing about what a residue is called.
+    number is formatted rather than stripped, and by the same function that
+    names a built Residue: the run record and the log have to agree about what
+    a residue is called with the warnings the rest of the package emits.
     """
 
-    chain, number, insertion_code = key
-
-    return f"{chain}{number}{insertion_code}"
+    return format_residue_label(*key)
 
 
 def residue_key(record):
     """Returns (chain, residue number, insertion code) for one atom record.
 
-    The insertion code is in the key even though the parser otherwise ignores it
-    and merges residues that differ only by it. That is not a fix for the
-    merging, which is its own defect: it only stops one alternate location being
-    elected across two residues that happen to share a number, which would be a
-    new error rather than an old one.
+    The same three fields build_structure groups residues on, so a conformer is
+    elected for exactly the residue it belongs to. They were already the key
+    here in version 7.0, when the parser still merged residues differing only by
+    an insertion code: electing across two such residues would have been a new
+    error rather than an old one, so the election has never had to change.
+
+    The model is deliberately absent. A file holding several models is reduced
+    to one before the election runs, so a key that carried the model would only
+    ever hold the one value.
     """
 
     return record.chain_name, record.residue_number, record.insertion_code

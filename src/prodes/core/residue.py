@@ -1,18 +1,48 @@
 import numpy as np
 
 
+def residue_label(chain, number, insertion_code):
+    """Returns how a residue is named in a message, such as A22 or H100A.
+
+    Chain, number and insertion code, which together are its identity. Written
+    in one place because three of them exist: a residue, a key held by the
+    conformer election, and the columns of an SSBOND record that named no
+    residue at all. Two warnings disagreeing about what a residue is called are
+    two warnings about different residues as far as a reader can tell.
+    """
+
+    return f"{chain}{number}{insertion_code}"
+
+
 class Residue:
 
-    def __init__(self, name, structure, number=0, chain=None, _pka=None, terminus=None):
+    def __init__(self, name, structure, number=0, chain=None, insertion_code="", _pka=None, terminus=None):
         self.atoms = np.empty([0])
         self.name = name
         self.number = number
+        # A residue is its chain, its number and its insertion code. The code is
+        # blank for almost every residue of almost every structure and is not
+        # optional for the ones that have it: Kabat and Chothia numbering write
+        # every CDR insertion as one, so H100 and H100A are two residues that
+        # share a number and nothing else.
+        self.insertion_code = insertion_code
         self.structure = structure
         self.chain = chain
         self._pka = _pka
         self.terminus = terminus
         self._heavy_atoms = None
         self.disulfide_partner = None
+
+    @property
+    def label(self):
+        """Returns how this residue is named in a message, such as A22 or H100A.
+
+        Two residues sharing a number are told apart here or not at all, so
+        every warning that names a residue reads it from this rather than
+        formatting the number on its own.
+        """
+
+        return residue_label(self.chain.name if self.chain is not None else "", self.number, self.insertion_code)
 
     @property
     def heavy_atoms(self):

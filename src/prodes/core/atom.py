@@ -22,6 +22,7 @@ class Atom:
         chain=None,
         residue=None,
         _charge=None,
+        insertion_code="",
     ):
 
         self.identifier = identifier
@@ -29,6 +30,14 @@ class Atom:
         self.residue_name = residue_name
         self.chain_name = chain_name
         self.residue_number = residue_number
+        # Part of the residue's identity and not decoration: a Kabat numbered
+        # H100 and H100A are two residues, and the writer has a column for it.
+        # Last in the signature rather than beside the residue number, where it
+        # belongs by meaning, because every argument after an inserted one
+        # changes meaning for a caller passing positionally, and that is a
+        # silent misassignment rather than an error. This class has made that
+        # mistake once already; see the comment in parser.Builder.
+        self.insertion_code = insertion_code
         self.x = x
         self.y = y
         self.z = z

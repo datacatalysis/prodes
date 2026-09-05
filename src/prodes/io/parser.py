@@ -66,13 +66,20 @@ def read_pdb_text(file):
 
 
 def read_ssbond_line(line):
-    """Reads one SSBOND record and returns (chain1, number1, chain2, number2, sym1, sym2).
+    """Reads one SSBOND record and returns (residue1, residue2, sym1, sym2).
 
-    The record names the two cysteines of a disulfide bond and the symmetry
-    operator each is under. A blank or missing symmetry field is read as the
-    identity operator, because hand-written and trimmed PDB files routinely stop
-    before column 72 and a bond would otherwise be discarded for being
-    incompletely written rather than for being crystallographic.
+    Each residue is a (chain, number, insertion code) triple, which is what
+    names a residue in this package, and the symmetry operators say which
+    asymmetric unit each cysteine sits in. A blank or missing symmetry field is
+    read as the identity operator, because hand-written and trimmed PDB files
+    routinely stop before column 72 and a bond would otherwise be discarded for
+    being incompletely written rather than for being crystallographic.
+
+    The insertion codes are read by slice rather than by index, for the same
+    reason: a record trimmed after the residue number has not said the code is
+    blank, but blank is the only thing it can usefully mean, and reading column
+    36 of a 35 character line would cost the bond. Antibody records reach this
+    column routinely, 4NZU joining H98 to H100C among them.
 
     Returns None for a line that cannot be read, so that one malformed record
     costs its own bond rather than the whole file.
@@ -87,10 +94,12 @@ def read_ssbond_line(line):
         logger.warning("could not read an SSBOND record, ignoring it: %s", line.rstrip())
         return None
 
+    insertion1 = line[21:22].strip()
+    insertion2 = line[35:36].strip()
     symmetry1 = line[59:65].strip() or IDENTITY_SYMMETRY_OPERATOR
     symmetry2 = line[66:72].strip() or IDENTITY_SYMMETRY_OPERATOR
 
-    return chain1, number1, chain2, number2, symmetry1, symmetry2
+    return (chain1, number1, insertion1), (chain2, number2, insertion2), symmetry1, symmetry2
 
 
 def coordinate_lines(lines):
@@ -185,26 +194,52 @@ def warn_about_unwritable_coordinates(lines, source):
         )
 
 
-def warn_about_models(records, source):
-    """Warns if the file holds more than one model, because prodes merges them.
+def keep_first_model(records, source):
+    """Returns the records of the first model only, saying so when there are more.
 
-    prodes has no notion of a model. Every model's atoms are read into one
-    structure, and because a residue number that reappears does not start a new
-    residue, the later models' atoms pile onto whichever residue was made last:
-    a 20 model NMR ensemble comes out as one impossible structure with tens of
-    thousands of atoms in a single residue. That is its own defect with its own
-    issue, and it is not fixed here, so the least this can do is say that the
-    number it is about to report describes something that is not a protein.
+    An NMR ensemble writes the same molecule 20 times over, and prodes describes
+    one structure at a time. Reading every model into one structure, which is
+    what happened until version 8.0, produced a molecule that does not exist:
+    1PIT came out as 58 residues holding 17 780 atoms, 16 901 of them in a
+    single residue, with a formal charge of -1096 for a protein whose real
+    charge at pH 7 is about +6. Measured against the version this replaces:
+    issue #13 reports -1362, which was taken before the disulfide and
+    alternate-conformation work moved it.
+
+    The first model is the one kept, which is what most tools do and what a user
+    handing over an NMR file almost always means. The structure that comes out
+    is identical, atom for atom, to parsing a file holding that model alone.
+
+    "First" is the lowest model number among the records of the type being
+    built, rather than the reader's model 0 outright, so a file whose HETATM
+    records begin in a later model is described rather than refused for holding
+    no records at all. Models are numbered from zero by the reader's own count,
+    so the first model of an ordinary file is 0 and not 1.
+
+    Selecting a model here rather than later also settles two things that would
+    otherwise be decided across models: the conformer election keys residues on
+    chain, number and insertion code and carries no model, so one model's
+    alternate conformations could decide another's residue; and residues are
+    grouped by a key already seen in the chain, so a repeated residue number
+    piles the later models' atoms onto whichever residue was made most recently.
+    Both become unreachable once one model is chosen.
     """
 
     models = {record.model for record in records}
-    if len(models) > 1:
-        logger.warning(
-            "%s holds %d models and prodes has no notion of one; every model's atoms are read into a single structure, "
-            "which is not a structure of anything, so take one model out of the file before describing it",
-            source,
-            len(models),
-        )
+    if len(models) < 2:
+        return records
+
+    first = min(models)
+    kept = [record for record in records if record.model == first]
+    logger.warning(
+        "%s holds %d models; describing the first of them and ignoring the %d records of the rest, "
+        "because an ensemble read as one structure is not a structure of anything",
+        source,
+        len(models),
+        len(records) - len(kept),
+    )
+
+    return kept
 
 
 def ssbond_records(lines):
@@ -238,20 +273,23 @@ def as_object_array(items):
 def build_structure(name, records):
     """Builds a Structure, its chains, its residues and its atoms from elected records.
 
-    The grouping rules are the ones prodes has always used, quirks included,
-    because this change is about where the fields come from and not about what a
-    residue is:
+    The grouping rules:
 
     - A chain is its name. A name seen before switches back to the chain that
       already has it rather than starting a second one.
-    - A residue is a (chain, residue number) pair, and the insertion code is not
-      in it, so a Kabat numbered H100 and H100A are one residue. That is issue
-      #14 and it is deliberately not fixed here.
-    - The test is membership in the numbers already seen in that chain, so a
-      number that reappears after another has intervened does not start a new
-      residue: its atoms join whichever residue was made most recently. That is
-      the mechanism behind the damage an NMR ensemble takes, issue #13, and it
-      is also deliberately not fixed here.
+    - A residue is a (chain, residue number, insertion code) triple, which is
+      how a PDB file names one. Until version 8.0 the insertion code was left
+      out, so a Kabat numbered H100 and H100A were read as one residue carrying
+      both side chains: on the 4NZU Fab that merged 12 residues away, moved the
+      molecular weight by 1.3 kDa, titrated a lysine and a cysteine against
+      aspartate's pKa, and hid a cysteine well enough that its SSBOND record was
+      discarded and both halves of the bond titrated as free thiols.
+    - The test is membership in the keys already seen in that chain, so a key
+      that reappears after another has intervened does not start a new residue:
+      its atoms join whichever residue was made most recently. That is a quirk
+      rather than a decision, and it is now only reachable through a file that
+      writes one residue's atoms in two places, the models of an ensemble having
+      been separated before this point.
     - The N terminus is the first residue of a chain. The C terminus is written
       on the chain's last residue at the moment a new chain name appears, and on
       the structure's last residue at the end, which is not the same as "the
@@ -265,7 +303,7 @@ def build_structure(name, records):
     structure = Structure(name)
     chains = {}
     chain_order = []
-    residue_numbers = {}
+    residue_keys = {}
     chain_atoms = {}
     chain_residues = {}
     residue_atoms = {}
@@ -284,6 +322,7 @@ def build_structure(name, records):
             record.x,
             record.y,
             record.z,
+            insertion_code=record.insertion_code,
             segment_id=record.segment_id,
             element=record.element,
             altloc=record.altloc,
@@ -298,7 +337,7 @@ def build_structure(name, records):
             current_chain = Chain(record.chain_name, structure)
             chains[record.chain_name] = current_chain
             chain_order.append(record.chain_name)
-            residue_numbers[record.chain_name] = set()
+            residue_keys[record.chain_name] = set()
             chain_atoms[record.chain_name] = []
             chain_residues[record.chain_name] = []
         elif record.chain_name != current_chain.name:
@@ -307,11 +346,18 @@ def build_structure(name, records):
         atom.chain = current_chain
         chain_atoms[current_chain.name].append(atom)
 
-        if record.residue_number not in residue_numbers[current_chain.name]:
-            current_residue = Residue(record.residue_name, structure, record.residue_number, current_chain)
+        residue_key = (record.residue_number, record.insertion_code)
+        if residue_key not in residue_keys[current_chain.name]:
+            current_residue = Residue(
+                record.residue_name,
+                structure,
+                record.residue_number,
+                current_chain,
+                insertion_code=record.insertion_code,
+            )
             if not chain_residues[current_chain.name]:
                 current_residue.terminus = "N"
-            residue_numbers[current_chain.name].add(record.residue_number)
+            residue_keys[current_chain.name].add(residue_key)
             chain_residues[current_chain.name].append(current_residue)
             residue_atoms[current_residue] = []
             residues.append(current_residue)
@@ -337,6 +383,12 @@ def parse_pdb_text(text, name, identifier="ATOM"):
     The records are read in full before anything is built, because which
     conformation of a disordered residue to keep cannot be decided until all of
     them have been seen.
+
+    One model and one conformation of each residue survive that reading. A file
+    holding several models is described by its first, and a residue modelled in
+    several conformations by its best occupied one; both are said out loud, and
+    both are decisions about which coordinates describe the molecule rather than
+    about how to read a column.
 
     SSBOND records are collected on the same text and handed to the disulfide
     detection at the end, so that any structure which has been parsed from a
@@ -367,11 +419,17 @@ def parse_pdb_text(text, name, identifier="ATOM"):
     if not records:
         raise ValueError(f"{name} holds no {identifier} records")
 
-    warn_about_models(records, name)
+    # Selected before the election, which carries no model in its key and would
+    # otherwise let one model's alternate conformations decide another model's
+    # residue. The count is kept for the run record, where it is the only thing
+    # that says the features describe one member of an ensemble.
+    models = len({record.model for record in records})
+    records = keep_first_model(records, name)
 
     kept, report = elect_conformers(records)
 
     structure = build_structure(name, kept)
+    structure.models = models
     structure.alternate_conformers = report
     report_alternate_conformers(report, name)
 
@@ -470,6 +528,7 @@ def write_pdb(structure, filename, chain="all"):
             col4 = ""
             col5 = ""
             col6 = ""
+            col_insertion = " "
             for atom in atoms:
 
                 if atom_nmbr > 0:
@@ -481,7 +540,7 @@ def write_pdb(structure, filename, chain="all"):
                         for _ in range(5 - len(col2)):
                             col2 = " " + col2
 
-                        f.write(f"TER   {col2}     {col4}{col5}{col6}\n")
+                        f.write(f"TER   {col2}     {col4}{col5}{col6}{col_insertion}".rstrip() + "\n")
                     elif col4.strip() in viable_residues and atom.residue_name not in viable_residues:
 
                         atom_nmbr += 1
@@ -490,7 +549,7 @@ def write_pdb(structure, filename, chain="all"):
                         for _ in range(5 - len(col2)):
                             col2 = " " + col2
 
-                        f.write(f"TER   {col2}     {col4}{col5}{col6}\n")
+                        f.write(f"TER   {col2}     {col4}{col5}{col6}{col_insertion}".rstrip() + "\n")
 
                 atom_nmbr += 1
 
@@ -524,6 +583,14 @@ def write_pdb(structure, filename, chain="all"):
                 col6 = str(atom.residue_number)
                 for _ in range(4 - len(col6)):
                     col6 = " " + col6
+
+                # Column 27 is the insertion code, and it is part of which
+                # residue this atom belongs to. Written blank for the atoms that
+                # have none, which is almost all of them, and for the dummy
+                # surface points, which have no residue at all. A round trip
+                # through the writer that dropped it would hand back a file
+                # whose H100 and H100A are one residue again.
+                col_insertion = (atom.insertion_code or " ")[0]
 
                 col7 = str(atom.x)
                 if len(col7) > 11:
@@ -559,7 +626,7 @@ def write_pdb(structure, filename, chain="all"):
                 for _ in range(2 - len(col13)):
                     col13 = " " + col13
 
-                f.write(f"{col1}{col2}{col3}{col4}{col5}{col6} {col7}{col8}{col9}{col10}{col11}      {col12}{col13}\n")
+                f.write(f"{col1}{col2}{col3}{col4}{col5}{col6}{col_insertion}{col7}{col8}{col9}{col10}{col11}      {col12}{col13}\n")
             f.write("END")
 
 

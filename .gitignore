@@ -23,3 +23,7 @@ docs/similar_tools/*
 # APBS comparison outputs and the capture file APBS writes into its working directory
 apbs_results
 io.mc
+
+# direnv, which exports the GitHub token from the environment. The file names
+# no secret itself, but it is machine local and belongs to nobody else's clone.
+.envrc

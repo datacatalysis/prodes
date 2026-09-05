@@ -14,12 +14,14 @@ file text
    │
    ├─ prodes.io.parser.check_records_were_all_read
    │
+   ├─ prodes.io.parser.keep_first_model        one model per structure, from 8.0
+   │
    ├─ prodes.io.conformers.elect_conformers    one conformation per residue, the 7.0 rules
    │
    └─ prodes.io.parser.build_structure         Structure, Chain, Residue, Atom
 ```
 
-`AtomRecord` is the piece that matters. It carries every field separately: the atom name, the alternate location, the residue name, the chain, the residue number, **the insertion code**, the coordinates, the occupancy, the segment id, the element, **the model number**, and whether the line was an `ATOM` or a `HETATM`. The reader that came before it had no insertion code on an atom and no notion of a model at all, which is why the two open parser defects — merging residues that differ only by an insertion code, and merging the models of an NMR ensemble — were parser rewrites rather than changes to a grouping key. They are now changes to a grouping key, in `build_structure`.
+`AtomRecord` is the piece that matters. It carries every field separately: the atom name, the alternate location, the residue name, the chain, the residue number, **the insertion code**, the coordinates, the occupancy, the segment id, the element, **the model number**, and whether the line was an `ATOM` or a `HETATM`. The reader that came before it had no insertion code on an atom and no notion of a model at all, which is why the two parser defects open at 7.1 — merging residues that differ only by an insertion code, and merging the models of an NMR ensemble — were parser rewrites rather than changes to a grouping key. Both were fixed in version 8.0 as exactly that: the insertion code joined the residue key in `build_structure`, and the model number became the filter `keep_first_model` applies before the election. See `docs/residue_identity.md`.
 
 ## Why not Biopython's entity tree
 
@@ -71,7 +73,7 @@ No feature value moves on any well-formed structure: the eight structures in `te
 | two spellings of one residue number, `  30` and `0030` | two separate conformer elections | one election, because the residue number is now compared as the integer the format says it is |
 | a coordinate record after a six-column `END   ` or any `CONECT` | read, though the reader that produced the file may not have meant it to be | `ValueError`, because the records are invisible to the reader and losing them quietly is worse |
 | a coordinate written to more than three decimals | kept | read to three decimals, with one warning per file |
-| a file holding more than one `MODEL` | merged into one impossible structure, silently | merged the same way, with a warning saying so |
+| a file holding more than one `MODEL` | merged into one impossible structure, silently | merged the same way, with a warning saying so. From version 8.0 the first model is described and the rest are dropped, which is where that warning went |
 | a residue key in the alternate-conformer report | the raw columns, so a blank chain gave a double space and `0022` stayed padded | the parsed chain and number, so `PRO 22` and `PRO A22` |
 | a record name padded with something other than spaces, such as `ATOM\t\t` | read, because the name was compared stripped | not read, and the reader says it ignored an unrecognised record |
 | a negative occupancy | silent | one log line, from the reader. The conformer chosen is unchanged |

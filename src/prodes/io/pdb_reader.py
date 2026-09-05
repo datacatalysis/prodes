@@ -24,7 +24,9 @@ tree would silently undo them. Worse, the tree cannot express what prodes reads:
 Collecting records avoids all four, because no ``DisorderedAtom`` or
 ``DisorderedResidue`` is ever built. It also hands prodes the fields its own
 identity rules need, one per record: the insertion code, the hetero flag and the
-model number, none of which the old hand-written reader carried.
+model number, none of which the old hand-written reader carried, and the first
+and last of which are what version 8.0 uses to tell one residue from another and
+one model from the next.
 
 ``MMCIFParser`` drives the same builder interface, so an mmCIF reader is a
 second entry point onto the same records rather than a second parser.
@@ -91,9 +93,9 @@ class AtomRecord:
     The identity fields are what the old reader did not have. ``residue_number``
     and ``insertion_code`` are separate, so a Kabat numbered residue can be told
     from its neighbour, and ``model`` is the model the record was written under,
-    so an NMR ensemble can be told from a single structure. Neither is used to
-    group residues yet; both are here so that doing so is a change to one
-    grouping key rather than to the reader.
+    so an NMR ensemble can be told from a single structure. From version 8.0
+    both decide what is built: the first two thirds of a residue's key in
+    ``build_structure``, and which records reach it at all.
     """
 
     model: int
