@@ -408,3 +408,14 @@ def test_the_run_record_says_how_many_models_the_file_held():
 
     assert run_metadata("structure.pdb", {}, 10, np.array([0.0, 1.0]))["models_in_file"] == 1
     assert run_metadata("structure.pdb", {}, 10, np.array([0.0, 1.0]), models=20)["models_in_file"] == 20
+
+
+def test_the_run_record_says_how_many_elements_were_guessed():
+    """A structure whose radii come from guesses is a different thing from one whose radii were read
+
+    Defaults to 0, for a structure whose element columns were all read rather
+    than inferred.
+    """
+
+    assert run_metadata("structure.pdb", {}, 10, np.array([0.0, 1.0]))["inferred_elements"] == 0
+    assert run_metadata("structure.pdb", {}, 10, np.array([0.0, 1.0]), inferred_elements=3)["inferred_elements"] == 3

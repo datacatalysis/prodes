@@ -431,6 +431,7 @@ def parse_pdb_text(text, name, identifier="ATOM"):
     structure = build_structure(name, kept)
     structure.models = models
     structure.alternate_conformers = report
+    structure.inferred_elements = sum(1 for record in kept if record.element_inferred)
     report_alternate_conformers(report, name)
 
     structure.residues[-1].terminus = "C"
