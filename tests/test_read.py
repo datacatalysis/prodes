@@ -10,6 +10,7 @@ import json
 import pytest
 
 import prodes
+from prodes.io.pka_converter import ANY_CHAIN
 
 PDB_PATH = "tests/data/1GDW.pdb.zip"
 
@@ -24,12 +25,21 @@ def test_read_loads_a_zipped_structure():
 
 
 def test_read_loads_a_pka_file(tmp_path):
-    """A .pka file returns the residue to pKa mapping it holds."""
+    """A .pka file returns the chain to residue to pKa mapping it holds."""
+
+    pka_file = tmp_path / "structure.pka"
+    pka_file.write_text(json.dumps({"A": {"5": [{"N+": 7.541}], "8": [{"ARG": 14.0}]}}))
+
+    assert prodes.read(str(pka_file)) == {"A": {5: [{"N+": 7.541}], 8: [{"ARG": 14.0}]}}
+
+
+def test_read_loads_a_pre_9_0_pka_file(tmp_path):
+    """A pre-9.0 file has no chain in it at all, and is applied to every chain."""
 
     pka_file = tmp_path / "structure.pka"
     pka_file.write_text(json.dumps({"5": [{"N+": 7.541}], "8": [{"ARG": 14.0}]}))
 
-    assert prodes.read(str(pka_file)) == {5: [{"N+": 7.541}], 8: [{"ARG": 14.0}]}
+    assert prodes.read(str(pka_file)) == {ANY_CHAIN: {5: [{"N+": 7.541}], 8: [{"ARG": 14.0}]}}
 
 
 def test_read_rejects_an_unsupported_extension(tmp_path):
