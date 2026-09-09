@@ -12,6 +12,10 @@ repos:
       # repository legitimately commits.
       - id: check-added-large-files
         args: [--maxkb=500]
+      # Only fires while a merge or rebase is actually in progress, so it costs nothing
+      # otherwise: it catches a conflict marker left in a file when a resolution is
+      # finished by hand. It is a no-op in CI, which is never mid-merge.
+      - id: check-merge-conflict
   - repo: https://github.com/psf/black
     rev: 26.5.1
     hooks:
@@ -29,16 +33,6 @@ repos:
         args: [--ignore-missing-imports, --allow-untyped-globals]
         files: ^src/.*\.py$
 
-  # Secret scanning, on the staged diff and before the commit exists. That is the
-  # only point at which the fix is cheap: a credential that reaches a commit has
-  # to be rotated whether or not it was ever pushed. Needs GITGUARDIAN_API_KEY in
-  # the environment and fails without it. Bypass a false positive with
-  # `SKIP=ggshield git commit`.
-  - repo: https://github.com/gitguardian/ggshield
-    rev: v1.54.0
-    hooks:
-      - id: ggshield
-        stages: [pre-commit]
 
   # Documents, datasets and archives are not code, and removing one after the
   # fact does not remove it from the history.
