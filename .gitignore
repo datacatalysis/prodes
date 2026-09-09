@@ -3,7 +3,11 @@ __pycache__
 *.egg-info
 dist
 build
-.env
+# Anything starting with .env, not just `.env` itself. The files that actually
+# leak are hand-made copies such as .env.bak-20260908 or .env.before-trim, which
+# match neither `.env` nor `*.bak`.
+.env*
+!.env.example
 .conda-env
 temp
 benchmark_results
@@ -27,3 +31,6 @@ io.mc
 # direnv, which exports the GitHub token from the environment. The file names
 # no secret itself, but it is machine local and belongs to nobody else's clone.
 .envrc
+
+# Added by ggshield
+.cache_ggshield

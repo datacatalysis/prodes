@@ -2,8 +2,16 @@ name: GitGuardian scan
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
+
+# One run per commit. A branch with an open pull request is already covered by
+# the pull_request trigger, so the push trigger is limited to main to stop every
+# commit building twice.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   scanning:
