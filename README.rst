@@ -72,17 +72,25 @@ Check that it worked:
     pytest                      # run the test suite
     pre-commit run --all-files  # lint and type-check the whole repository
 
-**Maintainers, one more check.** Secrets are scanned in CI by GitGuardian on every push, and blocked at the push itself by GitHub push protection. Maintainers can also catch one before it is committed at all, by installing `ggshield <https://docs.gitguardian.com/ggshield-docs/getting-started>`_ once per machine rather than once per repository:
+**Maintainers, strongly recommended.** Secrets are scanned in CI by GitGuardian on every push, and blocked at the push itself by GitHub push protection. Anyone with push access should also catch one locally, before it ever leaves the machine. Install the opt-in hook once per clone, alongside the ordinary one:
+
+.. code-block:: text
+
+    pre-commit install
+    pre-commit install -c .pre-commit-config-ggshield.yaml --hook-type pre-push
+
+Those are two different git hooks, ``.git/hooks/pre-commit`` and ``.git/hooks/pre-push``, so they coexist. The second scans the commits being pushed and refuses the push if it finds a credential.
+
+It needs a GitGuardian account. If you do not have one, set one up, then either export ``GITGUARDIAN_API_KEY`` or run ``ggshield auth login`` once:
 
 .. code-block:: text
 
     pipx install ggshield
     ggshield auth login           # on a server, see below
-    ggshield install -m global    # a git hook covering every repository you clone
 
-``ggshield auth login`` opens a browser and waits for the OAuth callback on localhost, so it cannot work over SSH. On a server, create a personal access token in the GitGuardian dashboard with the ``scan`` scope and hand it to ``ggshield auth login --method token``, which prompts for it and stores it. Exporting ``GITGUARDIAN_API_KEY`` skips the login entirely, which is what CI does.
+``ggshield auth login`` opens a browser and waits for the OAuth callback on localhost, so it cannot work over SSH. On a server, create a personal access token in the GitGuardian dashboard with the ``scan`` scope and hand it to ``ggshield auth login --method token``, which prompts for it and stores it. Exporting ``GITGUARDIAN_API_KEY`` skips the login entirely, which is what CI does. ``ggshield install -m global`` is an alternative that covers every repository you clone rather than this one.
 
-This is deliberately not in ``.pre-commit-config.yaml``, which everyone runs: ggshield needs a GitGuardian account, so a hook there would break the first commit of anyone who clones the repository. See `SECURITY.md <SECURITY.md>`_.
+This is deliberately not in ``.pre-commit-config.yaml``, which everyone runs: ggshield needs an account, so a hook there would break the first commit of anyone who clones the repository. Outside contributors need only ``pre-commit install`` and are unaffected. See `SECURITY.md <SECURITY.md>`_.
 
 Quick start
 ------------

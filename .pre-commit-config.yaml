@@ -33,16 +33,6 @@ repos:
         args: [--ignore-missing-imports, --allow-untyped-globals]
         files: ^src/.*\.py$
 
-  # Secret scanning, on the staged diff and before the commit exists. That is the
-  # only point at which the fix is cheap: a credential that reaches a commit has
-  # to be rotated whether or not it was ever pushed. Needs GITGUARDIAN_API_KEY in
-  # the environment and fails without it. Bypass a false positive with
-  # `SKIP=ggshield git commit`.
-  - repo: https://github.com/gitguardian/ggshield
-    rev: v1.54.0
-    hooks:
-      - id: ggshield
-        stages: [pre-commit]
 
   # Documents, datasets and archives are not code, and removing one after the
   # fact does not remove it from the history.
