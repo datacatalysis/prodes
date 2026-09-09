@@ -88,8 +88,10 @@ WHAT IS IN HERE
   prodes_run.json                  version, settings, time of the run, and
                                    what the structure was read as: how many
                                    disulfide bonds were found, how many
-                                   alternate conformations were collapsed, and
-                                   how many models the file held
+                                   alternate conformations were collapsed, how
+                                   many models the file held, and how many
+                                   atoms had their element guessed from a
+                                   blank column
 
 The point clouds and the features come out of the same calculation, so a picture
 here can never disagree with a number in the feature table.
@@ -123,7 +125,7 @@ def prodes_version():
         return "unknown"
 
 
-def run_metadata(pdb_file, settings, n_points, ep, disulfides=0, alternate_conformers=None, models=1):
+def run_metadata(pdb_file, settings, n_points, ep, disulfides=0, alternate_conformers=None, models=1, inferred_elements=0):
     """Returns the record of what was run, written into every bundle.
 
     The disulfide count is here rather than in the feature table because it
@@ -139,6 +141,10 @@ def run_metadata(pdb_file, settings, n_points, ep, disulfides=0, alternate_confo
     The model count is the same case again. An NMR file holds 20 structures and
     the features describe the first of them, which is a fact about the numbers
     that the shipped file, holding all 20, does not carry on its own.
+
+    The inferred element count says how many atoms of the structure had their
+    radius, and so their contribution to the surface, decided by a guess at
+    their element rather than by the file's own columns. See docs/pdb_reading.md.
     """
 
     return {
@@ -149,6 +155,7 @@ def run_metadata(pdb_file, settings, n_points, ep, disulfides=0, alternate_confo
         "disulfides": int(disulfides),
         "alternate_conformers": alternate_conformers or {},
         "models_in_file": int(models),
+        "inferred_elements": int(inferred_elements),
         "surface_points": int(n_points),
         "ep_min_volts": round(float(ep.min()), 3) if n_points else None,
         "ep_max_volts": round(float(ep.max()), 3) if n_points else None,

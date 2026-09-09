@@ -29,6 +29,18 @@ class Structure:
         # and the bundle ships the file unchanged, so this is what says that the
         # features describe one member of an ensemble.
         self.models = 1
+        # How many atoms of this structure had a blank element column, and so
+        # got a radius from a guess at their element rather than from the file.
+        # Set by prodes.io.parser.parse_pdb_text, over the records the election
+        # kept, and 0 for a structure that was not read from a file.
+        #
+        # Smaller, in general, than the count prodes.io.pdb_reader.read_atom_records
+        # logs at read time: the log covers every ATOM and HETATM record the file
+        # holds, before keep_first_model, elect_conformers and the ATOM/HETATM
+        # filter in parse_pdb_text have thrown any of them away. The two only agree
+        # for a single model file read for one record type with no alternate
+        # conformations.
+        self.inferred_elements = 0
 
     def _compute_centroid(self):
         coords = np.array([[a.x, a.y, a.z] for a in self.heavy_atoms])

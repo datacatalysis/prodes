@@ -40,6 +40,7 @@ from io import StringIO
 from math import isfinite
 from pathlib import Path
 
+from Bio.Data.IUPACData import atom_weights
 from Bio.PDB.PDBExceptions import PDBConstructionException, PDBConstructionWarning
 from Bio.PDB.PDBParser import PDBParser
 from Bio.PDB.StructureBuilder import StructureBuilder
@@ -112,6 +113,45 @@ class AtomRecord:
     occupancy: float | None
     segment_id: str
     element: str
+    # True where the column was blank and the element above is a guess from the
+    # atom name rather than something the file said. Carried on the record and
+    # not just logged, because build_structure keeps only the elected records
+    # and the run record wants the count for the structure it actually built,
+    # not for every record the file held.
+    element_inferred: bool = False
+
+
+def infer_element(name, fullname):
+    """Guesses the element from the atom name, for a record whose element column is blank.
+
+    Follows the rule ``Bio.PDB.Atom._assign_element`` applies rather than calling it, since
+    calling it would mean constructing a ``Bio.PDB.Atom`` per record, which this builder
+    deliberately avoids. ``name`` and ``fullname`` are the same two fields ``PDBParser``
+    already passes to ``init_atom``: ``fullname`` is columns 13-16 verbatim, and ``name`` is
+    the same field with internal spaces stripped, but only where there are none to lose.
+
+    The first character of ``fullname`` is what tells an inorganic element from an organic
+    one: a metal is written from column 13, for example ``"FE  "``, while a carbon,
+    nitrogen, oxygen, sulphur, phosphorus or hydrogen leaves it blank, for example
+    ``" CA "`` for an alpha carbon rather than a calcium ion. A name starting with a digit,
+    the convention for a stereo-specific hydrogen such as ``1HB1``, is read from its second
+    character instead.
+
+    Returns ``"X"`` where nothing sensible comes out, matching ``Bio.PDB.Atom``'s own
+    fallback for an atom neither rule can place. That includes a name that is a single
+    digit and nothing else: real files never write one, but a blank element column tends
+    to arrive on files with other blank or malformed columns too, and guessing is not
+    worth an ``IndexError`` naming neither the file nor the atom.
+    """
+
+    if fullname[0].isalpha() and not fullname[2:].isdigit():
+        putative_element = name.strip()
+    elif name[0].isdigit():
+        putative_element = name[1] if len(name) > 1 else ""
+    else:
+        putative_element = name[0]
+
+    return putative_element.upper() if putative_element.capitalize() in atom_weights else "X"
 
 
 def readable_occupancy(occupancy):
@@ -206,9 +246,20 @@ class PdbRecordBuilder(StructureBuilder):
         the rest of the package looks for: not the charged atoms of its residue,
         not the aromatic carbons that carry their own radius, not the SG a
         disulfide is found from.
+
+        A blank element column is filled in by ``infer_element`` rather than
+        left blank. Left blank, it reaches ``data.vdw_radius("")`` from the
+        surface area calculation and raises, and reaches ``Residue.heavy_atoms``
+        and ``Residue.protons`` before that, where it counts every hydrogen as
+        heavy and no atom as a proton. A column that is not blank is kept
+        exactly as written, guesswork being a fallback and not a correction.
         """
 
         resname, field, resseq, icode = self.residue
+        element = (element or "").strip()
+        element_inferred = not element
+        if element_inferred:
+            element = infer_element(name, fullname)
         self.records.append(
             AtomRecord(
                 model=self.model_number,
@@ -224,7 +275,8 @@ class PdbRecordBuilder(StructureBuilder):
                 z=round(float(coord[2]), COORDINATE_DECIMALS),
                 occupancy=readable_occupancy(occupancy),
                 segment_id=self.segment_id,
-                element=(element or "").strip(),
+                element=element,
+                element_inferred=element_inferred,
             )
         )
 
@@ -393,5 +445,9 @@ def read_atom_records(text, source):
             raise ValueError(f"could not read the coordinate records of {source}: {type(error).__name__}: {error}") from error
 
     report_reader_warnings(complaints, total, source)
+
+    inferred = sum(1 for record in builder.records if record.element_inferred)
+    if inferred:
+        logger.warning("%s: inferred the element for %d atom(s) with a blank element column", source, inferred)
 
     return builder.records

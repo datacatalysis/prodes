@@ -2,8 +2,11 @@
 
 The reader is the layer that replaced the hand-written column arithmetic. What
 has to hold is that it returns one record per coordinate line, in file order,
-carrying that line's own columns and nothing inferred, because everything above
-it — the election, the residue grouping, every feature — is built on that.
+carrying that line's own columns, because everything above it — the election,
+the residue grouping, every feature — is built on that. The one deliberate
+exception is the element: a blank column is filled in by guessing from the
+atom name rather than left blank, because a blank one crashes the surface
+calculation outright. See infer_element.
 """
 
 import logging
@@ -115,19 +118,135 @@ def test_an_unusable_occupancy_is_treated_as_absent(tmp_path, unusable):
     assert read_atom_records(text, "test")[0].occupancy is None
 
 
-def test_a_blank_element_column_is_not_guessed_at(tmp_path):
-    """Biopython's Atom class infers the element from the atom name; this does not
+def test_a_blank_element_column_is_inferred_from_the_atom_name(tmp_path):
+    """With a blank element every atom used to raise from the van der Waals lookup
 
-    Inferring it would be an improvement and is its own issue: with a blank
-    element every atom raises from the van der Waals radius lookup, so a file
-    with no element column produces no features at all. Improving it here would
-    change numbers in a release that promises not to.
+    Follows the alanine worked in the issue: eight atoms, an element column
+    truncated away entirely, and the element each one should read as.
     """
 
-    lines = [atom_line(1, "N", "ALA", "A", 1, 0.0, 0.0, 0.0, "")[:76], atom_line(2, "HB1", "ALA", "A", 1, 1.0, 0.0, 0.0, "")[:76]]
+    names = ["N", "CA", "C", "O", "CB", "HB1", "HB2", "HB3"]
+    lines = [atom_line(serial, name, "ALA", "A", 1, 0.0, 0.0, 0.0, "")[:76] for serial, name in enumerate(names, start=1)]
     text = open(write_structure(tmp_path / "no_element.pdb", lines)).read()
 
-    assert [record.element for record in read_atom_records(text, "test")] == ["", ""]
+    records = read_atom_records(text, "test")
+
+    assert [record.element for record in records] == ["N", "C", "C", "O", "C", "H", "H", "H"]
+    assert all(record.element_inferred for record in records)
+
+
+def test_a_name_starting_with_a_digit_infers_from_the_second_character(tmp_path):
+    """1HB1 is a hydrogen, a stereo-specific one written with the digit first"""
+
+    from tests.pdb_records import pdb_line
+
+    line = pdb_line(
+        [
+            (1, "ATOM"),
+            (7, "    1"),
+            (13, "1HB1"),
+            (18, "ALA"),
+            (22, "A"),
+            (23, "   1"),
+            (31, "   0.000"),
+            (39, "   0.000"),
+            (47, "   0.000"),
+            (55, "  1.00"),
+            (61, "  0.00"),
+        ]
+    )
+    text = open(write_structure(tmp_path / "digit_first.pdb", [line])).read()
+
+    record = read_atom_records(text, "test")[0]
+
+    assert record.element == "H"
+    assert record.element_inferred is True
+
+
+def test_a_two_letter_element_survives_the_inorganic_convention(tmp_path):
+    """FE written from column 13, the convention that marks a metal rather than an alpha carbon
+
+    Bio.PDB.Atom._assign_element tells a metal from a protein atom by whether the
+    name starts in column 13: "FE  " is iron and " FE " would be misread as
+    fluorine. Getting that distinction right is what makes inferring an element
+    safe to turn on at all.
+    """
+
+    from tests.pdb_records import pdb_line
+
+    line = pdb_line(
+        [
+            (1, "HETATM"),
+            (7, "    1"),
+            (13, "FE  "),
+            (18, "FE "),
+            (22, "A"),
+            (23, "   1"),
+            (31, "   0.000"),
+            (39, "   0.000"),
+            (47, "   0.000"),
+            (55, "  1.00"),
+            (61, "  0.00"),
+        ]
+    )
+    text = open(write_structure(tmp_path / "iron.pdb", [line])).read()
+
+    record = read_atom_records(text, "test")[0]
+
+    assert record.element == "FE"
+    assert record.element_inferred is True
+
+
+def test_a_name_that_is_only_a_digit_infers_x_rather_than_crashing(tmp_path):
+    """No real atom is named a bare digit, but a blank element column tends to arrive with
+    other malformed columns on the same file, and the digit-first rule would otherwise
+    index a second character that is not there.
+    """
+
+    from tests.pdb_records import pdb_line
+
+    line = pdb_line(
+        [
+            (1, "ATOM"),
+            (7, "    1"),
+            (13, "1   "),
+            (18, "ALA"),
+            (22, "A"),
+            (23, "   1"),
+            (31, "   0.000"),
+            (39, "   0.000"),
+            (47, "   0.000"),
+            (55, "  1.00"),
+            (61, "  0.00"),
+        ]
+    )
+    text = open(write_structure(tmp_path / "digit_only.pdb", [line])).read()
+
+    record = read_atom_records(text, "test")[0]
+
+    assert record.element == "X"
+    assert record.element_inferred is True
+
+
+def test_a_written_element_is_not_marked_inferred(tmp_path):
+    """The flag distinguishes a guess from a read, not just a present value from an absent one"""
+
+    lines = [atom_line(1, "CB", "ALA", "A", 1, 0.0, 0.0, 0.0, "C")]
+    text = open(write_structure(tmp_path / "written_element.pdb", lines)).read()
+
+    assert read_atom_records(text, "test")[0].element_inferred is False
+
+
+def test_an_inferred_element_is_logged_once_with_a_count(tmp_path, caplog):
+    """A structure whose radii come from guesses is a different thing from one whose radii were read"""
+
+    lines = [atom_line(serial, "N", "ALA", "A", serial, 0.0, 0.0, 0.0, "")[:76] for serial in range(1, 4)]
+    text = open(write_structure(tmp_path / "no_element.pdb", lines)).read()
+
+    with caplog.at_level(logging.WARNING):
+        read_atom_records(text, "no_element")
+
+    assert "inferred the element for 3 atom" in caplog.text
 
 
 def test_an_element_symbol_is_uppercased(tmp_path):

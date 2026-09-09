@@ -213,6 +213,26 @@ def test_a_file_with_no_records_of_the_requested_type_says_so():
         pdb_parser.parse(file_path, identifier="HETATM")
 
 
+def test_a_structure_with_no_element_column_reads_the_same_as_one_with_it(tmp_path):
+    """A real structure, not a handful of hand written atoms
+
+    1GDW's own element column is stripped from every coordinate line. The
+    inference has to give back the same element, and so the same radius, that
+    the file's own column gives, or the acceptance test for issue 23 is not met.
+    """
+
+    text = parser.read_pdb_text(file_path)
+    blanked = "\n".join(line[:76] if line[0:6] in ("ATOM  ", "HETATM") else line for line in text.splitlines())
+
+    with_columns = parser.parse_pdb_text(text, "with_columns")
+    without_columns = parser.parse_pdb_text(blanked, "without_columns")
+
+    assert [atom.element for atom in without_columns.atoms] == [atom.element for atom in with_columns.atoms]
+    assert [atom.radius for atom in without_columns.atoms] == [atom.radius for atom in with_columns.atoms]
+    assert without_columns.inferred_elements == len(without_columns.atoms)
+    assert with_columns.inferred_elements == 0
+
+
 def test_a_coordinate_record_after_an_end_record_is_refused(tmp_path):
     """the reader stops at END, so the atoms after one would be lost silently
 
