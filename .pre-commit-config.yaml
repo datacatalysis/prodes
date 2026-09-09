@@ -7,6 +7,11 @@ repos:
     hooks:
       - id: end-of-file-fixer
       - id: trailing-whitespace
+      # `git add -A` in a checkout with untracked data stages whatever is lying
+      # around, and git history is permanent. 500 kB is well above anything this
+      # repository legitimately commits.
+      - id: check-added-large-files
+        args: [--maxkb=500]
   - repo: https://github.com/psf/black
     rev: 26.5.1
     hooks:
@@ -23,3 +28,35 @@ repos:
       - id: mypy
         args: [--ignore-missing-imports, --allow-untyped-globals]
         files: ^src/.*\.py$
+
+  # Secret scanning, on the staged diff and before the commit exists. That is the
+  # only point at which the fix is cheap: a credential that reaches a commit has
+  # to be rotated whether or not it was ever pushed. Needs GITGUARDIAN_API_KEY in
+  # the environment and fails without it. Bypass a false positive with
+  # `SKIP=ggshield git commit`.
+  - repo: https://github.com/gitguardian/ggshield
+    rev: v1.54.0
+    hooks:
+      - id: ggshield
+        stages: [pre-commit]
+
+  # Documents, datasets and archives are not code, and removing one after the
+  # fact does not remove it from the history.
+  - repo: local
+    hooks:
+      - id: no-office-documents
+        name: block office documents
+        entry: >-
+          Office documents do not belong in git. Commit code and text, and keep
+          the document with the project's other documents.
+        language: fail
+        files: '(?i)\.(odt|ods|odp|doc|docx|xls|xlsx|xlsm|ppt|pptx)$'
+
+      - id: no-datasets-or-archives
+        name: block datasets and archives
+        entry: >-
+          Datasets and archives do not belong in git. Track them with DVC and
+          commit the .dvc stub instead.
+        language: fail
+        files: '(?i)\.(zip|7z|rar|tar|tgz|gz|parquet|feather|h5|hdf5|pkl|pickle|npy|npz|joblib|sqlite|db)$'
+        exclude: '^(tests?|test_data)/|^docs/benchmark/'
