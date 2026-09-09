@@ -473,20 +473,50 @@ class PDBparser:
 
 
 def read_pka(file):
-    """Reads a pka json file and will return a dict containing residue numbers and pkas
-    pka json files can be generated using the pka_converter in prodes.io"""
+    """Reads a pKa JSON file, returning {chain: {residue number: [{group: pka}]}}.
+
+    pka json files can be generated using the pka_converter in prodes.io. The
+    outer key is either a chain identifier, matching Residue.chain.name, or
+    prodes.io.pka_converter.ANY_CHAIN, meaning "apply to every chain" — used
+    by convert_hpp, whose predictor gives no chain, and by files written
+    before version 9.0, which had no chain in the format at all.
+
+    A pre-9.0 file is a flat {residue number: [{group: pka}]} mapping, with no
+    outer chain level. It is still read, wrapped as {ANY_CHAIN: {...}}, and a
+    warning is logged: the value it holds is applied to every chain with a
+    matching residue, exactly as it was before there was a chain to key on,
+    but now that fallback is explicit rather than an accident of the format.
+    See issue #12.
+    """
 
     import json
 
+    from prodes.io.pka_converter import ANY_CHAIN, is_legacy_pka_dict
+
     with open(file) as f:
-        pka_dict = {}
-        pkas = json.loads(f.read())
-        for residue, pka_list in pkas.items():
+        raw = json.loads(f.read())
+
+    is_legacy = is_legacy_pka_dict(raw)
+    is_current = any(isinstance(value, dict) for value in raw.values())
+    if is_legacy and is_current:
+        raise ValueError(f"{file} mixes the pre-9.0 flat pKa format with the current chain-keyed one; it cannot be read")
+
+    if is_legacy:
+        logger.warning(
+            "%s uses the pre-9.0 pKa format, keyed by residue number alone; every value in it will be applied to every chain with a matching residue. Reconvert it with the current pka_converter for chain-specific values.",
+            file,
+        )
+        raw = {ANY_CHAIN: raw}
+
+    pka_dict = {}
+    for chain, residues in raw.items():
+        pka_dict[chain] = {}
+        for residue, pka_list in residues.items():
             residue = int(residue)
-            pka_dict[residue] = []
+            pka_dict[chain][residue] = []
             for pka in pka_list:
                 for identifier, pka_value in pka.items():
-                    pka_dict[residue].append({identifier: float(pka_value)})
+                    pka_dict[chain][residue].append({identifier: float(pka_value)})
 
     return pka_dict
 
