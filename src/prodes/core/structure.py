@@ -236,9 +236,22 @@ class Structure:
     def redo_pkas(self, pka_dict):
         """Applies predicted pKa values from a file, one titratable group at a time.
 
-        Takes {residue number: [{group: pka}]}, as read by
+        Takes {chain: {residue number: [{group: pka}]}}, as read by
         prodes.io.parser.read_pka, where the group is a three letter residue
-        name for a side chain or "N+" or "C-" for a terminus.
+        name for a side chain or "N+" or "C-" for a terminus, and chain is
+        either a chain identifier matching residue.chain.name, or
+        prodes.io.pka_converter.ANY_CHAIN, applied to every chain. A residue is
+        looked up under its own chain first, falling back to ANY_CHAIN only
+        when its own chain has no entry for that residue number. From version
+        9.0, this is what keeps a value predicted for one chain from being
+        offered to another chain's same-numbered residue; see issue #12.
+
+        A pre-9.0, flat {residue number: [{group: pka}]} dict, with no chain
+        level at all, is also still accepted directly here, not only through
+        read_pka: it is wrapped under ANY_CHAIN and a warning is logged,
+        exactly as read_pka does for a file on disk. Without this, a caller
+        that built such a dict by hand, the way every example before version
+        9.0 showed, would have it silently applied to no residue at all.
 
         Values are merged into the residue's own groups rather than replacing
         its list wholesale. Replacing it meant that a file naming a residue's
@@ -261,21 +274,28 @@ class Structure:
         textbook value for their residue type, which is usually not what the
         absence was meant to convey.
 
-        The key is the residue number alone, so a value predicted for one chain
-        is offered to every chain, and from version 8.0, in which residues that
-        differ only by an insertion code stopped being read as one, to every
-        insertion of that number as well. Where the residue types differ the
-        value has nowhere to go and is dropped rather than misapplied, which is
-        why this is quieter than it sounds; where they match it is applied to
-        both. That is issue #12, and fixing it means keying the pKa file format
-        itself on the chain, which is not done here.
+        A residue's chain and number still do not distinguish an insertion
+        code: PROPKA's summary line carries no insertion-code column, so two
+        residues that differ only by insertion code and share a number and
+        type still collide. See docs/residue_identity.md.
         """
 
-        from prodes.io.pka_converter import PROPKA_NOT_TITRATABLE
+        from prodes.io.pka_converter import ANY_CHAIN, PROPKA_NOT_TITRATABLE, is_legacy_pka_dict
+
+        if is_legacy_pka_dict(pka_dict):
+            logger.warning(
+                "redo_pkas was given a pre-9.0 flat pKa dict, keyed by residue number alone; every value in it will be applied to every chain with a matching residue. Convert it to the current {chain: {...}} shape for chain-specific values."
+            )
+            pka_dict = {ANY_CHAIN: pka_dict}
 
         applied = set()
         for residue in self.residues:
-            for group in pka_dict.get(residue.number, []):
+            chain_name = residue.chain.name if residue.chain is not None else ""
+            groups = pka_dict.get(chain_name, {}).get(residue.number)
+            if groups is None:
+                groups = pka_dict.get(ANY_CHAIN, {}).get(residue.number, [])
+
+            for group in groups:
                 for key, pka in group.items():
 
                     if residue.set_group_pka(key, pka):

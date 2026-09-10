@@ -97,7 +97,7 @@ It is not conformational averaging. Prodes describes one member of the ensemble,
 
 ## What is still narrower than a PDB file
 
-**A pKa file names a residue by number alone.** `Structure.redo_pkas` and the converters in `prodes.io.pka_converter` key on the residue number, so a value predicted for one chain is offered to every chain, and now to every insertion of that number as well.
+**A pKa file names a residue by chain and number, but not by insertion code.** From version 9.0 `Structure.redo_pkas` and the converters in `prodes.io.pka_converter` key on `(chain, residue number)`, so a value predicted for one chain is no longer offered to another chain's same-numbered residue (see the README's [pKa values and protonation states](../README.rst) section). Insertion codes are a different, still-open gap: a chain and number alone do not distinguish two residues that differ only by insertion code.
 
 The predictor does the same thing on its way in. PROPKA 3.5.1 run on 4NZU writes five different residues into its summary as number 100 of chain H, the insertion code nowhere in the line:
 
@@ -109,11 +109,11 @@ The predictor does the same thing on its way in. PROPKA 3.5.1 run on 4NZU writes
    LYS 100 H     5.81      10.50        (H100E)
 ```
 
-so `convert_propka` keys all five under `100` and nothing in the file says which residue each belongs to. What saves it is that entries are applied by **group** name: the histidine value lands on the histidine, the lysine value on the lysine, and the cysteine's 99.99-style marker is dropped because that cysteine is in a disulfide and does not titrate, which PROPKA agrees with. Measured on this file, every value lands on the residue it was predicted for.
+so `convert_propka` keys all five under `(H, 100)` and nothing in the file says which residue each belongs to. What saves it is that entries are applied by **group** name: the histidine value lands on the histidine, the lysine value on the lysine, and the cysteine's 99.99-style marker is dropped because that cysteine is in a disulfide and does not titrate, which PROPKA agrees with. Measured on this file, every value lands on the residue it was predicted for.
 
-Two residues of the same type sharing a number in one chain are the case that stays wrong: `H100` and `H100B` are both aspartates, and both take 1.76 whichever of them it was predicted for. Before this change the position was worse rather than better, since all nine insertions were one residue named `ASP` and four of the five predictions were dropped for naming a group it did not have.
+Two residues of the same type sharing a number in one chain are the case that stays wrong: `H100` and `H100B` are both aspartates, and both take 1.76 whichever of them it was predicted for. Before chains were tracked at all, the position was worse rather than better, since all nine insertions were one residue named `ASP` and four of the five predictions were dropped for naming a group it did not have.
 
-Fixing this properly means keying the pKa file format itself on the chain and the insertion code, which is a change to a documented public format.
+Fixing this properly means adding an insertion code to the pKa file format too, a further change to the same documented public format.
 
 **A residue written in two places is still merged.** The grouping test is membership in the keys already seen on the chain, so a file that writes one residue's atoms, then another residue, then the first residue again puts the late atoms on whichever residue was made most recently. Selecting one model put the case that mattered out of reach rather than changing this rule.
 
