@@ -7,7 +7,7 @@ Those columns are designed to be used directly as the input features of a machin
 
 Prodes is **completely free, including for commercial use**, under the MIT licence. It needs no external electrostatics solver, no licence server and no web upload. A protein under 1000 residues should only take a few minutes on a normal desktop computer, and seconds on a dedicated linux server.
 
-**Jump to:** `Installation`_ | `Quick start`_ | `Viewing the surface`_ | `The output bundle`_ | `Ionic strength and screening`_ | `Using the features in a model`_ | `pKa values and protonation states`_ | `Using Prodes from Python`_ | `Speed`_ | `How to cite`_
+**Jump to:** `Installation`_ | `Quick start`_ | `Viewing the surface`_ | `The output bundle`_ | `Ionic strength and screening`_ | `Using the features in a model`_ | `Preparing your structure`_ | `pKa values and protonation states`_ | `Using Prodes from Python`_ | `Speed`_ | `How to cite`_
 
 This is a fork of `tneijenhuis/prodes <https://github.com/tneijenhuis/prodes>`_, a package written by `Tim Neijenhuis <https://www.linkedin.com/in/tim-neijenhuis>`_ during his Ph.D. at the `Marcel Ottens group <https://www.tudelft.nl/en/faculty-of-applied-sciences/about-faculty/departments/biotechnology/research-sections/bioprocess-engineering/marcel-ottens-group/>`_ at the `Delft University of Technology (TU Delft) <https://www.tudelft.nl/>`_. Currently this fork preserves the original algorithm. The changes are performance (a 170x speedup for many proteins, see `Speed`_) and a reduced, non-redundant default feature set (see `The reduced feature set`_).
 
@@ -45,11 +45,17 @@ Installing as a user
     conda create -n prodes python=3.13
     conda activate prodes
     pip install git+https://github.com/datacatalysis/prodes.git
-    conda install conda-forge::propka
+    conda install conda-forge::propka conda-forge::pdb2pqr
 
 Prodes depends on NumPy, pandas and `Biopython <https://biopython.org>`_, which ``pip`` installs with it. Biopython reads the coordinate records of a PDB file; the rules that decide which alternate conformation of a residue to keep, and which cysteines are bonded, remain prodes' own. See `how prodes reads a PDB file <docs/pdb_reading.md>`_.
 
-The fourth line adds `PROPKA <https://github.com/jensengroup/propka>`_, which is a separate program by the Jensen group that predicts the pKa of each individual residue in your structure. Prodes does not need it to run, but you should use it: it takes seconds, it works on Windows, macOS and Linux, and it makes the charge-related features considerably more realistic. See `pKa values and protonation states`_. If you prefer, ``pip install propka`` does the same job.
+The fourth line adds two separate programs. Prodes needs neither to run, and you should use both.
+
+`PROPKA <https://github.com/jensengroup/propka>`_, from the Jensen group, predicts the pKa of each individual residue in your structure. It takes seconds, it works on Windows, macOS and Linux, and it makes the charge-related features considerably more realistic. See `pKa values and protonation states`_.
+
+`PDB2PQR <https://github.com/Electrostatics/pdb2pqr>`_, from the Electrostatics Consortium, repairs the structure before anything measures it: it rebuilds side chains that were not modelled, adds hydrogens, and reports the damage it cannot repair. On one antibody structure, rebuilding two unmodelled lysine side chains moved 31 of the 54 features and shifted the isoelectric point by more than a pH unit. See `Preparing your structure`_.
+
+Install PDB2PQR from conda-forge rather than with ``pip``: the PyPI package pins ``docutils<0.18``, which collides with Sphinx and several other common packages, and the conda-forge build does not.
 
 Installing as a developer
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -63,7 +69,7 @@ Installing as a developer
     conda activate prodes
     pre-commit install
 
-Note that ``environment.yml`` already installs Prodes itself, in editable mode and includes PROPKA.
+Note that ``environment.yml`` already installs Prodes itself, in editable mode, and includes both PROPKA and PDB2PQR.
 
 Check that it worked:
 
@@ -95,17 +101,24 @@ This is deliberately not in ``.pre-commit-config.yaml``, which everyone runs: gg
 Quick start
 ------------
 
-Activate the environment, then run these three commands on your structure:
+Activate the environment, then run these four commands on your structure:
 
 .. code-block:: text
 
     conda activate prodes
+    mkdir prepared
 
-    propka3 1GDW.pdb                                                  # predict per-residue pKa values
+    pdb2pqr --ff=PARSE --pdb-output=prepared/1GDW.pdb 1GDW.pdb prepared/1GDW.pqr  # repair the structure
+    propka3 prepared/1GDW.pdb                                          # predict per-residue pKa values
     python -m prodes.io.pka_converter 1GDW.pka propka -o 1GDW_pka.json  # convert them for Prodes
-    python -m prodes 1GDW.pdb 1GDW.zip --ph 7.4 --pka 1GDW_pka.json   # calculate the features
+    python -m prodes prepared/1GDW.pdb 1GDW.zip --ph 7.4 --pka 1GDW_pka.json  # calculate the features
 
 That writes ``1GDW.zip``, a bundle holding the 54 features, the surface points they were calculated from, and ready-to-open viewer scripts. On a small protein the whole thing takes seconds.
+
+Two things about that sequence are worth noticing, and both are explained under `Preparing your structure`_:
+
+* **Everything after the** ``pdb2pqr`` **line runs on the repaired structure**, ``prepared/1GDW.pdb``, not on the file you downloaded. That includes PROPKA.
+* **The repaired file keeps the original name, in a new directory.** Prodes takes the ``ID`` column from the file name, so writing ``1GDW_prep.pdb`` instead would label that row ``1GDW_prep``. PROPKA writes its ``.pka`` into the directory you are standing in rather than next to its input, which is why the third line reads ``1GDW.pka`` and not ``prepared/1GDW.pka``.
 
 See `Viewing the surface`_ to look at the result.
 
@@ -310,7 +323,7 @@ Using the features in a model
 
 This is the point of the whole exercise, so here is the shape of a complete QSPR workflow.
 
-**Step 1, calculate features for every structure you have measured.** Loop over a folder, predict pKa values for each structure, and let the feature rows accumulate in one CSV:
+**Step 1, calculate features for every structure you have measured.** Loop over a folder, repair each structure, predict pKa values for it, and let the feature rows accumulate in one CSV:
 
 .. code-block:: python
 
@@ -320,16 +333,31 @@ This is the point of the whole exercise, so here is the shape of a complete QSPR
     import prodes
     from prodes.io.pka_converter import convert_propka, write_json
 
+    prepared = Path("prepared")
     bundles = Path("bundles")
+    prepared.mkdir(exist_ok=True)
+    bundles.mkdir(exist_ok=True)
 
     for pdb in sorted(Path("structures").glob("*.pdb")):
-        subprocess.run(["propka3", pdb.name], cwd=pdb.parent, check=True)
-        pka_json = pdb.with_suffix(".pka.json")
-        write_json(convert_propka(str(pdb.with_suffix(".pka"))), str(pka_json))
+        repaired = prepared / pdb.name
+        subprocess.run(
+            ["pdb2pqr", "--ff=PARSE", f"--pdb-output={repaired}",
+             str(pdb), str(repaired.with_suffix(".pqr"))],
+            check=True,
+        )
+        subprocess.run(["propka3", repaired.name], cwd=prepared, check=True)
 
-        prodes.run_prodes(str(pdb), str(bundles / f"{pdb.stem}.zip"), ph=7.4, pkas_file=str(pka_json))
+        pka_json = prepared / f"{pdb.stem}_pka.json"
+        write_json(convert_propka(str(prepared / f"{pdb.stem}.pka")), str(pka_json))
 
-``check=True`` matters here: without it a structure PROPKA chokes on would fail silently, and the loop would carry on and calculate that protein with default pKa values instead. You would end up with one row in the table quietly computed on a different basis from all the others.
+        prodes.run_prodes(str(repaired), str(bundles / f"{pdb.stem}.zip"),
+                          ph=7.4, pkas_file=str(pka_json))
+
+The repaired file keeps the original name inside ``prepared/``, so the ``ID`` column still reads ``1GDW`` rather than ``1GDW_prep``. See `Preparing your structure`_.
+
+``check=True`` matters in both calls: without it a structure PROPKA chokes on would fail silently, and the loop would carry on and calculate that protein with default pKa values instead. You would end up with one row in the table quietly computed on a different basis from all the others.
+
+PDB2PQR refuses some structures outright rather than repairing them, and with ``check=True`` that stops the loop, which is what you want. Decide what to do with a refused structure explicitly: repair it another way, run Prodes on the unrepaired file and record that you did, or drop it. What you must not do is let half your dataset be repaired and the other half not.
 
 **Step 2, join the features to your measurements** on the ``ID`` column. Your measurement file needs an ``ID`` column whose values match the structure file names (see `Input files`_):
 
@@ -399,6 +427,68 @@ The values are not quite identical to the released 4.x numbers, for a separate r
 
 **Scope.** Screening applies to the surface features, the ``SurfEp`` family: 9 of the 54 default features, and 38 of the 105 with ``--full-features``, the extra 19 being the ``SurfEp*Average`` columns computed from partial rather than formal charges. The ``ShellEp`` features, 9 by default and 19 with the full set, are unchanged, and that is a measured decision rather than an omission: they are computed by a different route which divides the path at the molecular surface and weights the solvent leg with a permittivity of 80 against 4 for the protein, so a distant charge is already damped about twentyfold and the offset that affected the surface never built up. Checked against an APBS equivalent, the unscreened shell agrees at a Spearman of 0.877, and adding screening moved that to 0.855. See ``docs/screening_validation.md``.
 
+Preparing your structure
+-------------------------
+
+**Prodes describes the structure you give it. It does not correct one.** If a surface lysine has no side chain in the file, Prodes gives that residue no charge and says nothing about it, and every charge-derived feature comes out wrong.
+
+`PDB2PQR <https://github.com/Electrostatics/pdb2pqr>`_ repairs the structure first. It is free, BSD-3-Clause, pure Python, and one command.
+
+.. code-block:: text
+
+    mkdir prepared
+    pdb2pqr --ff=PARSE --pdb-output=prepared/1GDW.pdb 1GDW.pdb prepared/1GDW.pqr
+
+``--pdb-output`` is the flag that matters. The ``.pqr`` file is PDB2PQR's normal output and Prodes cannot read it; ``--pdb-output`` writes the repaired structure as a PDB, which Prodes can. Run everything after this point, PROPKA included, on the repaired file.
+
+**Keep the original file name and change the directory, not the other way round.** Prodes takes the ``ID`` column of the output from the file name it was given (see `Input files`_), so a repaired file called ``1GDW_prep.pdb`` labels that row ``1GDW_prep``. Over a dataset that is tedious to undo.
+
+Prodes will also print ``Ignoring unrecognized record 'TER'`` on a PDB2PQR output file. That is harmless: ``TER`` is a chain separator and carries no coordinates.
+
+How much does it matter?
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+PDB entry 4HKZ is a Fab. Two of its lysines are modelled only as far as CB, which is ordinary for surface residues at that resolution. The only difference between these two columns is whether those two side chains are present:
+
+=====================================  =======================  =====================
+Feature                                side chains unmodelled   side chains rebuilt
+=====================================  =======================  =====================
+Formal charge at pH 7.4                                     -2                      0
+Isoelectric point                                         6.46                   7.61
+Mean surface electrostatic potential                    -0.013                 +0.011
+Positive surface points                                 12,976                 13,684
+=====================================  =======================  =====================
+
+**31 of the 54 default features move.** The net charge is wrong by 2, the isoelectric point is wrong by 1.14 units, and the mean surface potential has the wrong sign. For choosing between an anion and a cation exchanger at a given buffer pH, a pI of 6.46 and a pI of 7.61 are different recommendations.
+
+This is not universal. Many deposited structures are complete. It is a property of resolution and of surface disorder, and the residues most often left unmodelled are the long charged ones, which are exactly the residues that carry the charge.
+
+What it fixes
+~~~~~~~~~~~~~~
+
+PDB2PQR rebuilds missing heavy atoms, adds every hydrogen, optimises the hydrogen-bond network (including flipping Asn, Gln and His where the deposited assignment is the worse one), resolves the steric clashes that creates, adds a missing ``OXT``, detects backbone chain breaks and names them, and refuses to continue on a gap too large to rebuild rather than describing a hole in silence. Prodes does none of that.
+
+Prodes keeps two jobs itself and does them well: it recognises disulfide bonds, so a cystine is not titrated as a free thiol, and it resolves alternate conformations by keeping the best occupied one per residue.
+
+**Prodes uses only the geometry from the prepared file.** It reads ``ATOM`` records, filters out hydrogens, and re-titrates every residue from its own pKa table at the pH you ask for, so the hydrogens, protonation states and partial charges PDB2PQR writes are all discarded. That is deliberate: it is what lets you run Prodes at several pH values against one prepared structure.
+
+You still need PROPKA
+~~~~~~~~~~~~~~~~~~~~~~
+
+PDB2PQR can run PROPKA itself, with ``--titration-state-method=propka``. **That does not replace the** ``propka3`` **step.** PDB2PQR does not write a ``.pka`` file: it uses the values internally to choose protonation states and then discards them, so ``prodes.io.pka_converter`` has nothing to read. It also bakes in a single pH, where Prodes deliberately separates prediction from calculation so you can predict once and run at many pH values.
+
+What to take from PDB2PQR is the **ordering**: it runs PROPKA after repairing the structure, and that is the right way round. On 4HKZ, PROPKA finds 145 titratable groups in the deposited file and 149 in the prepared one, the four extra being the two rebuilt lysine side chains and the two C-termini that only exist once ``OXT`` has been added. Six of the 145 shared groups shift by more than 0.5 pKa units.
+
+Traps
+~~~~~~
+
+* **Do not use** ``--ffout``. It renames residues into the force field's own scheme, putting ``ASH``, ``GLH``, ``LYN`` and ``HID`` into the file, and Prodes raises ``KeyError`` on any of those. Without it, both PARSE and AMBER keep canonical residue names.
+* **PDB2PQR can fail on sequence microheterogeneity.** Crambin (1CBN) has residue 22 modelled as both PRO and SER, and PDB2PQR 3.6.1 exits with ``Unable to debump biomolecule``. Prodes handles that case correctly on its own, so running it on the original file is a reasonable fallback when PDB2PQR refuses a structure.
+* **mmCIF input is unreliable.** PDB2PQR 3.6.1 accepts a ``.cif`` but produced an empty ``.pqr`` from a valid one in testing. Convert to PDB first.
+* **Be consistent within a dataset**, exactly as for PROPKA. Prepare all of your structures or none of them.
+
+Full detail, including what Prodes discards and why: `preparing a structure <docs/structure_preparation.md>`_.
+
 pKa values and protonation states
 ----------------------------------
 
@@ -426,14 +516,20 @@ It goes into the same environment as Prodes, and is already included if you buil
 
 or equivalently ``pip install propka``. Check it with ``propka3 --version``.
 
+PDB2PQR installs the same way, ``conda install conda-forge::pdb2pqr``, and is checked with ``pdb2pqr --version``. Prefer conda-forge to ``pip`` for that one; see `Installing as a user`_.
+
 The three steps
 ~~~~~~~~~~~~~~~~
 
-**Step 1, predict the pKa values.** PROPKA reads your PDB file and writes a ``.pka`` file beside it:
+**Step 1, predict the pKa values.** PROPKA reads your PDB file and writes a ``.pka`` file:
 
 .. code-block:: text
 
-    propka3 1GDW.pdb          # writes 1GDW.pka
+    propka3 prepared/1GDW.pdb     # writes 1GDW.pka in the current directory
+
+Point it at the **prepared** structure, not at the file you downloaded. A residue whose side chain is missing has no pKa to predict, so running PROPKA before the repair silently drops those groups. See `Preparing your structure`_.
+
+Note that PROPKA writes the ``.pka`` file into the directory you are standing in, named after the input's base name, rather than beside the input file.
 
 **Step 2, convert that file to the Prodes pKa JSON format.** Prodes ships converters for three predictors, usable from the command line
 
@@ -688,7 +784,7 @@ What Prodes offers, then, is:
 Three things Prodes does **not** do, which the better tools here do:
 
 * **No conformational averaging.** Genentech's main finding is that descriptors taken from a single static structure are unstable, which is why they average over a 5 ns accelerated-MD ensemble; MOE averages over a LowModeMD ensemble, and Aggrescan3D offers a coarse-grained dynamic mode. Prodes computes from whatever one structure you give it, and inherits that instability. You can approximate the ensemble average by running Prodes over several structures and averaging yourself, but nothing in the package does it for you.
-* **Almost no structure preparation.** The commercial suites correct the input before they describe it — resolve alternate conformations, rebuild missing side chains, cap chain breaks, form disulfide bonds, optimise the hydrogen-bond network. Prodes does two of those and none of the rest. It *recognises* existing disulfide bonds, so that a cystine is not titrated as a free thiol, and it *resolves alternate conformations* by keeping the best occupied one per residue. It does not form bonds, rebuild side chains, cap chain breaks or touch any coordinate. Preparing the structure is otherwise your responsibility.
+* **Almost no structure preparation of its own.** The commercial suites correct the input before they describe it — resolve alternate conformations, rebuild missing side chains, cap chain breaks, form disulfide bonds, optimise the hydrogen-bond network. Prodes does two of those and none of the rest. It *recognises* existing disulfide bonds, so that a cystine is not titrated as a free thiol, and it *resolves alternate conformations* by keeping the best occupied one per residue, which it does more reliably than PDB2PQR. It does not form bonds, rebuild side chains, cap chain breaks or touch any coordinate. The free fix is to run PDB2PQR first, which is why that is now the recommended workflow; see `Preparing your structure`_.
 * **No region restriction, and no pockets.** Every Prodes feature covers the whole molecule. There is no way to compute over a CDR, a domain or an interface, and nothing equivalent to NanoShaper's cavity and pocket detection.
 
 A caveat that applies to every tool in this list, Prodes included, and is made forcefully in both the Genentech and PROPERMAB papers: descriptor values are sensitive to the structure model, the protonation assignment and the software version, and different packages computing nominally the same quantity often disagree. Treat any of these numbers as reproducible only within one pipeline held fixed.
