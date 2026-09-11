@@ -393,6 +393,8 @@ PLS is a reasonable first choice for this kind of data because the features are 
 
 **A note on sample size.** 54 features is a lot if you have measured 20 proteins. With fewer observations than features, almost any model will fit the training data perfectly and predict nothing. The reduced feature set exists precisely to push that ratio in your favour; do not reach for ``--full-features`` to get more columns unless you have the observations to support them (see `The reduced feature set`_). Always report a score against a holdout blind test set, never a training-set score.
 
+**If you select features, select them inside the cross-validation loop.** Screening all 54 columns for the ones that correlate with your measurement, and then cross-validating a model built from the survivors, reports a score that is not out of sample: every held-out protein helped choose the features. On small datasets this reliably manufactures impressive numbers from nothing. ``sklearn.feature_selection.SelectKBest`` inside a ``Pipeline`` does it correctly, because the selection is refitted on each training fold.
+
 Ionic strength and screening
 -----------------------------
 
@@ -563,6 +565,10 @@ Steps 1 and 2 are done **once per structure**. Step 3 can then be repeated as of
     ``--pka`` takes the **converted JSON**, not PROPKA's own output. Passing a raw ``.pka`` file straight to ``--pka`` fails with a ``JSONDecodeError``.
 
 Residues that appear in the file get the predicted value; every other residue keeps its default. So a prediction covering only the titratable residues, which is what these tools produce, is complete as far as Prodes is concerned.
+
+.. note::
+
+    On a structure with more than one chain, such as an antibody, this step prints a long list of warnings of the form ``the pKa file gives THR 31 a ASP pKa, which that residue does not have; ignoring it``. Prodes currently keys pKa values by residue number alone, so every chain's predictions are offered to every chain's residue with that number and most of them are rejected. The warnings are noise rather than a problem with your file, but a genuine warning is easy to miss among them, and a residue that collides with the same residue type in another chain can take the wrong chain's value. Tracked as `issue #12 <https://github.com/datacatalysis/prodes/issues/12>`_.
 
 Cysteines and disulfide bonds
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
