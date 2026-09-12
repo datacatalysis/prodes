@@ -484,6 +484,10 @@ Positive surface points                                 12,976                 1
 
 This is not universal. Many deposited structures are complete. It is a property of resolution and of surface disorder, and the residues most often left unmodelled are the long charged ones, which are exactly the residues that carry the charge.
 
+Predicted structures are a different case. They are complete by construction, and running PDB2PQR over 826 Boltz2 models added exactly one atom to each and nothing else: ``OXT``, the second oxygen of the C-terminal carboxylate, which Boltz2 does not write. That one atom still matters, because structure sources disagree about whether to write it at all and Prodes treats it specially. See `the terminal oxygen <docs/structure_preparation.md>`_.
+
+**How often does the repair succeed?** Over 855 structures, 826 Boltz2 monomers and 29 crystal structures, PDB2PQR repaired 854 and refused 1, at a median of about one second per predicted structure. The refusal was correct: in ``5CHA`` a residue is modelled with its backbone nitrogen and no other atom, and a residue with one atom cannot be rebuilt. Prodes reads that same file without a word.
+
 What it fixes
 ~~~~~~~~~~~~~~
 
@@ -506,7 +510,7 @@ Traps
 * **Do not use** ``--ffout``. It renames residues into the force field's own scheme, putting ``ASH``, ``GLH``, ``LYN`` and ``HID`` into the file, and Prodes raises ``KeyError`` on any of those. Without it, both PARSE and AMBER keep canonical residue names.
 * **PDB2PQR can fail on sequence microheterogeneity.** Crambin (1CBN) has residue 22 modelled as both PRO and SER, and PDB2PQR 3.6.1 exits with ``Unable to debump biomolecule``. Prodes handles that case correctly on its own, so running it on the original file is a reasonable fallback when PDB2PQR refuses a structure.
 * **mmCIF input is unreliable.** PDB2PQR 3.6.1 accepts a ``.cif`` but produced an empty ``.pqr`` from a valid one in testing. Convert to PDB first.
-* **Be consistent within a dataset**, exactly as for PROPKA. Prepare all of your structures or none of them.
+* **Be consistent within a dataset**, exactly as for PROPKA. Prepare all of your structures or none of them. This matters more than it looks: because structure predictors disagree about whether to write the C-terminal ``OXT``, a half-prepared dataset carries a systematic difference between its sources. See `the terminal oxygen <docs/structure_preparation.md>`_.
 
 Full detail, including what Prodes discards and why: `preparing a structure <docs/structure_preparation.md>`_.
 

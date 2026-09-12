@@ -47,6 +47,32 @@ Only the **geometry**. Prodes reads `ATOM` records, filters out hydrogens, and r
 
 So the hydrogens PDB2PQR adds, the protonation states it assigns and the partial charges it writes are all discarded. That is deliberate: it is what lets you run Prodes at several pH values against one prepared structure. What you gain from the preparation step is that the atoms are there and in sensible positions.
 
+## What happens to a predicted structure: the terminal oxygen
+
+Run PDB2PQR over a set of predicted structures and you will usually see it add exactly one atom to each, and nothing else. That atom is `OXT`, and it is worth understanding because of what Prodes currently does with it.
+
+**What `OXT` is.** The C terminus of a protein is a carboxylate, `-C(=O)-O`. The PDB format names the first oxygen `O`, which every residue has, and the second one `OXT`, which only the last residue of a chain has. It is an ordinary heavy atom of the real molecule, not an artefact.
+
+**Structure sources disagree about whether to write it.** Measured over the structures at hand:
+
+| source | structures with `OXT` |
+| --- | --- |
+| AlphaFold database | 200 of 200 sampled |
+| Boltz2 predicted monomers | 0 of 200 sampled |
+| crystal structures | 21 of 29 |
+
+Boltz2 leaves it off, AlphaFold always writes it, and a crystal structure has it or not depending on whether the terminal residue was resolved. So the same protein arrives with a different atom count depending on where its structure came from.
+
+**Why that matters here.** Prodes assigns hydrophobicity per residue, giving every heavy atom the value of the residue it belongs to. `OXT` is the one exception: `Property_point.set_lipo` gives it a fixed value of 1.0, which on the default `mj_scaled` scale is the maximum, the same as phenylalanine. A carboxylate oxygen is one of the most hydrophilic groups in a protein, so the value is the wrong way round.
+
+This is an oversight in the original package rather than a decision, and an easy one to make: Prodes was written single-handed during a PhD and released under the MIT licence, and this is a single constant in one list comprehension. It has been in the code since the first commit and this fork preserves it, along with the rest of the original algorithm. It is recorded here because it is now measurable, not as a criticism.
+
+**The practical consequence is inconsistency, and that is what the repair fixes.** Adding one `OXT` to a Boltz2 model moves a median of 9 of the 54 default features. Most of that is the ordinary effect of one more atom on the surface, but two hydrophobicity features move in one direction: `NSurfPosMhp` rises on 33 of the 39 structures where it moves at all, and `SurfMhpMean` rises on 12 of the 13.
+
+The size of that shift is small. The problem is that today it is applied to every AlphaFold structure, no Boltz2 structure, and most but not all crystal structures. A model trained across sources is then partly learning which predictor produced each file.
+
+Repairing every structure with PDB2PQR removes that, because every structure ends up with exactly one `OXT` per chain. The artefact becomes a constant rather than a per-source bias, which is the thing that actually damages a model. Until the constant itself is changed, consistency is what matters, and this is the cheapest way to get it.
+
 ## The commands
 
 Install PDB2PQR into an environment of its own, not alongside Prodes:
