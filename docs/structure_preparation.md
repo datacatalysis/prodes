@@ -65,7 +65,7 @@ Boltz2 leaves it off, AlphaFold always writes it, and a crystal structure has it
 
 **Why that matters here.** Prodes assigns hydrophobicity per residue, giving every heavy atom the value of the residue it belongs to. `OXT` is the one exception: `Property_point.set_lipo` gives it a fixed value of 1.0, which on the default `mj_scaled` scale is the maximum, the same as phenylalanine. A carboxylate oxygen is one of the most hydrophilic groups in a protein, so the value is the wrong way round.
 
-This is an oversight in the original package rather than a decision, and an easy one to make: Prodes was written single-handed during a PhD and released under the MIT licence, and this is a single constant in one list comprehension. It has been in the code since the first commit and this fork preserves it, along with the rest of the original algorithm. It is recorded here because it is now measurable, not as a criticism.
+This behaviour is inherited from the original [tneijenhuis/prodes](https://github.com/tneijenhuis/prodes) repository, which this fork preserves.
 
 **The practical consequence is inconsistency, and that is what the repair fixes.** Adding one `OXT` to a Boltz2 model moves a median of 9 of the 54 default features. Most of that is the ordinary effect of one more atom on the surface, but two hydrophobicity features move in one direction: `NSurfPosMhp` rises on 33 of the 39 structures where it moves at all, and `SurfMhpMean` rises on 12 of the 13.
 
