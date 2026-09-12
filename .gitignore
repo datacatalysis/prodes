@@ -21,8 +21,10 @@ docs/similar_tools/*
 # wrong. Anything worth keeping belongs in a docstring, the README, or an issue.
 # Name them so the intent is visible in a file listing, for example
 # plan_thing_notrack.md or plan_thing_REVIEW1_notrack.md. Use git add -f to
-# commit one deliberately.
+# commit one deliberately. The same applies to a script written to answer one
+# question, which is superseded as soon as its answer is recorded.
 *_notrack.md
+*_notrack.py
 
 # APBS comparison outputs and the capture file APBS writes into its working directory
 apbs_results
