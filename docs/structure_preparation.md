@@ -131,7 +131,7 @@ The four extra groups are the two rebuilt lysine side chains and the two C-termi
 
 ## Chain identifiers
 
-Prodes needs chain identifiers. It groups residues by chain, decides which cysteines are bonded into a disulfide from the chain and residue number together, and applies per-residue pKa values by residue number. Flattening the chains would change all three.
+Prodes needs chain identifiers. It groups residues by chain, decides which cysteines are bonded into a disulfide from the chain and residue number together, and from version 9.0 looks up a predicted pKa by chain as well as residue number. Flattening the chains would change all three.
 
 PDB2PQR writes two files, and they behave differently.
 

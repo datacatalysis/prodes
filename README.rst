@@ -517,7 +517,7 @@ Traps
 Chain identifiers
 ~~~~~~~~~~~~~~~~~~
 
-Prodes needs chain identifiers. It groups residues by chain, decides which cysteines are bonded into a disulfide using the chain and residue number together, and applies per-residue pKa values by residue number. A file whose chains have been flattened into one would change all three.
+Prodes needs chain identifiers. It groups residues by chain, decides which cysteines are bonded into a disulfide using the chain and residue number together, and from version 9.0 looks up a predicted pKa by chain as well as residue number. A file whose chains have been flattened into one would change all three, and the pKa lookup would silently fall back to the behaviour that version 9.0 exists to remove.
 
 **The file Prodes reads is safe.** ``--pdb-output`` always writes the chain identifier, whether or not ``--keep-chain`` is given: the two files are byte for byte identical. Checked on structures of two, four, six and eight chains, and on a six-chain structure the repaired file gives Prodes the same six chains, the same 727 residues and the same 24 disulfide bonds as the original.
 
@@ -599,10 +599,6 @@ Steps 1 and 2 are done **once per structure**. Step 3 can then be repeated as of
     ``--pka`` takes the **converted JSON**, not PROPKA's own output. Passing a raw ``.pka`` file straight to ``--pka`` fails with a ``JSONDecodeError``.
 
 Residues that appear in the file get the predicted value; every other residue keeps its default. So a prediction covering only the titratable residues, which is what these tools produce, is complete as far as Prodes is concerned.
-
-.. note::
-
-    On a structure with more than one chain, such as an antibody, this step prints a long list of warnings of the form ``the pKa file gives THR 31 a ASP pKa, which that residue does not have; ignoring it``. Prodes currently keys pKa values by residue number alone, so every chain's predictions are offered to every chain's residue with that number and most of them are rejected. The warnings are noise rather than a problem with your file, but a genuine warning is easy to miss among them, and a residue that collides with the same residue type in another chain can take the wrong chain's value. Tracked as `issue #12 <https://github.com/datacatalysis/prodes/issues/12>`_.
 
 Cysteines and disulfide bonds
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
