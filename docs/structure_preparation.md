@@ -49,16 +49,31 @@ So the hydrogens PDB2PQR adds, the protonation states it assigns and the partial
 
 ## The commands
 
-```
-conda activate prodes
-conda install conda-forge::pdb2pqr           # once
+Install PDB2PQR into an environment of its own, not alongside Prodes:
 
+```
+conda create -n pdb2pqr -c conda-forge pdb2pqr      # once
+```
+
+Prodes never imports PDB2PQR. It only reads the repaired PDB file that PDB2PQR writes, so the two never have to be importable at the same time, and installing them together buys nothing. What it costs is that each one's pins constrain the other's for as long as both are installed. They are independently maintained projects on separate release cycles, and the first time one of them moves a shared dependency the other has not caught up with, a single environment stops solving and takes a working Prodes install down with it.
+
+A `pip install pdb2pqr` into the Prodes environment usually works if you would rather have one environment. Note that the PyPI package pins `docutils<0.18`, which collides with Sphinx and several other common packages; the conda-forge build does not carry that pin.
+
+Then:
+
+```
 mkdir prepared
+
+conda activate pdb2pqr
 pdb2pqr --ff=PARSE --pdb-output=prepared/1GDW.pdb 1GDW.pdb prepared/1GDW.pqr
+
+conda activate prodes
 propka3 prepared/1GDW.pdb                    # the prepared file, not the download
 python -m prodes.io.pka_converter 1GDW.pka propka -o 1GDW_pka.json
 python -m prodes prepared/1GDW.pdb 1GDW.zip --ph 7.4 --pka 1GDW_pka.json
 ```
+
+Inside a script, `conda run -n pdb2pqr pdb2pqr ...` calls PDB2PQR in its own environment without switching by hand, so a loop can run start to finish with the Prodes environment active.
 
 `--pdb-output` is the flag that matters. The `.pqr` file is PDB2PQR's normal output and Prodes cannot read it; `--pdb-output` writes the prepared structure as a PDB, which Prodes can.
 
@@ -102,6 +117,10 @@ The four extra groups are the two rebuilt lysine side chains and the two C-termi
 
 The single most valuable thing PDB2PQR gives you here is knowing that a residue is incomplete. Until Prodes reports that itself, you can check without installing anything by comparing each residue's atom names against the standard set for its type, and treating any structure with missing side-chain atoms on charged residues as suspect.
 
-## Reference
+## References
 
-Jurrus E, et al. Improvements to the APBS biomolecular solvation software suite. *Protein Sci* 27, 112-128 (2018). https://doi.org/10.1002/pro.3280
+PDB2PQR asks to be cited as both of these, and prints both on every run:
+
+Dolinsky TJ, Czodrowski P, Li H, Nielsen JE, Jensen JH, Klebe G, Baker NA. PDB2PQR: expanding and upgrading automated preparation of biomolecular structures for molecular simulations. *Nucleic Acids Research* **35**(Web Server issue), W522-W525 (2007). https://doi.org/10.1093/nar/gkm276
+
+Jurrus E, Engel D, Star K, Monson K, Brandi J, Felberg LE, et al. Improvements to the APBS biomolecular solvation software suite. *Protein Science* **27**(1), 112-128 (2018). https://doi.org/10.1002/pro.3280

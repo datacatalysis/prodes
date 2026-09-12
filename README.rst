@@ -45,17 +45,28 @@ Installing as a user
     conda create -n prodes python=3.13
     conda activate prodes
     pip install git+https://github.com/datacatalysis/prodes.git
-    conda install conda-forge::propka conda-forge::pdb2pqr
+    conda install conda-forge::propka
 
 Prodes depends on NumPy, pandas and `Biopython <https://biopython.org>`_, which ``pip`` installs with it. Biopython reads the coordinate records of a PDB file; the rules that decide which alternate conformation of a residue to keep, and which cysteines are bonded, remain prodes' own. See `how prodes reads a PDB file <docs/pdb_reading.md>`_.
 
-The fourth line adds two separate programs. Prodes needs neither to run, and you should use both.
+The fourth line adds `PROPKA <https://github.com/jensengroup/propka>`_, which is a separate program by the Jensen group that predicts the pKa of each individual residue in your structure. Prodes does not need it to run, but you should use it: it takes seconds, it works on Windows, macOS and Linux, and it makes the charge-related features considerably more realistic. See `pKa values and protonation states`_. If you prefer, ``pip install propka`` does the same job.
 
-`PROPKA <https://github.com/jensengroup/propka>`_, from the Jensen group, predicts the pKa of each individual residue in your structure. It takes seconds, it works on Windows, macOS and Linux, and it makes the charge-related features considerably more realistic. See `pKa values and protonation states`_.
+PDB2PQR, in its own environment
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-`PDB2PQR <https://github.com/Electrostatics/pdb2pqr>`_, from the Electrostatics Consortium, repairs the structure before anything measures it: it rebuilds side chains that were not modelled, adds hydrogens, and reports the damage it cannot repair. On one antibody structure, rebuilding two unmodelled lysine side chains moved 31 of the 54 features and shifted the isoelectric point by more than a pH unit. See `Preparing your structure`_.
+You should also use `PDB2PQR <https://github.com/Electrostatics/pdb2pqr>`_, which repairs the structure before anything measures it. On one antibody structure, rebuilding two unmodelled lysine side chains moved 31 of the 54 features and shifted the isoelectric point by more than a pH unit. See `Preparing your structure`_.
 
-Install PDB2PQR from conda-forge rather than with ``pip``: the PyPI package pins ``docutils<0.18``, which collides with Sphinx and several other common packages, and the conda-forge build does not.
+**Put it in an environment of its own:**
+
+.. code-block:: text
+
+    conda create -n pdb2pqr -c conda-forge pdb2pqr
+
+Prodes never imports PDB2PQR. It only reads the repaired PDB file that PDB2PQR writes, so the two programs never have to be importable at the same time, and installing them together buys nothing. What it costs is that each one's pins constrain the other's for as long as both are installed. These are two independently maintained projects on separate release cycles, and the first time one of them moves a shared dependency the other has not caught up with, a single environment stops solving and takes your working Prodes install down with it.
+
+Keeping them apart means an upgrade to either is someone else's problem.
+
+If you would rather have one environment anyway, ``pip install pdb2pqr`` into the Prodes environment usually works. Be aware that the PyPI package pins ``docutils<0.18``, which collides with Sphinx and several other common packages; the conda-forge build does not carry that pin, which is the other reason the separate conda environment is the cleaner route.
 
 Installing as a developer
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -69,7 +80,7 @@ Installing as a developer
     conda activate prodes
     pre-commit install
 
-Note that ``environment.yml`` already installs Prodes itself, in editable mode, and includes both PROPKA and PDB2PQR.
+Note that ``environment.yml`` already installs Prodes itself, in editable mode and includes PROPKA. It deliberately does not include PDB2PQR; see `PDB2PQR, in its own environment`_.
 
 Check that it worked:
 
@@ -101,14 +112,16 @@ This is deliberately not in ``.pre-commit-config.yaml``, which everyone runs: gg
 Quick start
 ------------
 
-Activate the environment, then run these four commands on your structure:
+Run these four commands on your structure. PDB2PQR lives in its own environment, so the first one is run with that environment active and the rest with the Prodes environment active:
 
 .. code-block:: text
 
-    conda activate prodes
     mkdir prepared
 
+    conda activate pdb2pqr
     pdb2pqr --ff=PARSE --pdb-output=prepared/1GDW.pdb 1GDW.pdb prepared/1GDW.pqr  # repair the structure
+
+    conda activate prodes
     propka3 prepared/1GDW.pdb                                          # predict per-residue pKa values
     python -m prodes.io.pka_converter 1GDW.pka propka -o 1GDW_pka.json  # convert them for Prodes
     python -m prodes prepared/1GDW.pdb 1GDW.zip --ph 7.4 --pka 1GDW_pka.json  # calculate the features
@@ -117,7 +130,7 @@ That writes ``1GDW.zip``, a bundle holding the 54 features, the surface points t
 
 Two things about that sequence are worth noticing, and both are explained under `Preparing your structure`_:
 
-* **Everything after the** ``pdb2pqr`` **line runs on the repaired structure**, ``prepared/1GDW.pdb``, not on the file you downloaded. That includes PROPKA.
+* **Everything after the** ``pdb2pqr`` **line runs on the repaired structure**, ``prepared/1GDW.pdb``, not on the file you downloaded. That includes PROPKA. In a script, ``conda run -n pdb2pqr pdb2pqr ...`` avoids switching environments by hand.
 * **The repaired file keeps the original name, in a new directory.** Prodes takes the ``ID`` column from the file name, so writing ``1GDW_prep.pdb`` instead would label that row ``1GDW_prep``. PROPKA writes its ``.pka`` into the directory you are standing in rather than next to its input, which is why the third line reads ``1GDW.pka`` and not ``prepared/1GDW.pka``.
 
 See `Viewing the surface`_ to look at the result.
@@ -341,8 +354,8 @@ This is the point of the whole exercise, so here is the shape of a complete QSPR
     for pdb in sorted(Path("structures").glob("*.pdb")):
         repaired = prepared / pdb.name
         subprocess.run(
-            ["pdb2pqr", "--ff=PARSE", f"--pdb-output={repaired}",
-             str(pdb), str(repaired.with_suffix(".pqr"))],
+            ["conda", "run", "-n", "pdb2pqr", "pdb2pqr", "--ff=PARSE",
+             f"--pdb-output={repaired}", str(pdb), str(repaired.with_suffix(".pqr"))],
             check=True,
         )
         subprocess.run(["propka3", repaired.name], cwd=prepared, check=True)
@@ -353,7 +366,7 @@ This is the point of the whole exercise, so here is the shape of a complete QSPR
         prodes.run_prodes(str(repaired), str(bundles / f"{pdb.stem}.zip"),
                           ph=7.4, pkas_file=str(pka_json))
 
-The repaired file keeps the original name inside ``prepared/``, so the ``ID`` column still reads ``1GDW`` rather than ``1GDW_prep``. See `Preparing your structure`_.
+``conda run -n pdb2pqr`` calls PDB2PQR in its own environment, so this loop runs start to finish with the Prodes environment active. The repaired file keeps the original name inside ``prepared/``, so the ``ID`` column still reads ``1GDW`` rather than ``1GDW_prep``. See `Preparing your structure`_.
 
 ``check=True`` matters in both calls: without it a structure PROPKA chokes on would fail silently, and the loop would carry on and calculate that protein with default pKa values instead. You would end up with one row in the table quietly computed on a different basis from all the others.
 
@@ -434,12 +447,18 @@ Preparing your structure
 
 **Prodes describes the structure you give it. It does not correct one.** If a surface lysine has no side chain in the file, Prodes gives that residue no charge and says nothing about it, and every charge-derived feature comes out wrong.
 
-`PDB2PQR <https://github.com/Electrostatics/pdb2pqr>`_ repairs the structure first. It is free, BSD-3-Clause, pure Python, and one command.
+`PDB2PQR <https://github.com/Electrostatics/pdb2pqr>`_ repairs the structure first. It is free, BSD-3-Clause, pure Python, and one command. Install it into an environment of its own rather than alongside Prodes; see `PDB2PQR, in its own environment`_ for why.
 
 .. code-block:: text
 
+    conda create -n pdb2pqr -c conda-forge pdb2pqr      # once
+
     mkdir prepared
+    conda activate pdb2pqr
     pdb2pqr --ff=PARSE --pdb-output=prepared/1GDW.pdb 1GDW.pdb prepared/1GDW.pqr
+    conda activate prodes
+
+Inside a script, ``conda run -n pdb2pqr pdb2pqr ...`` does the same thing without switching environments by hand.
 
 ``--pdb-output`` is the flag that matters. The ``.pqr`` file is PDB2PQR's normal output and Prodes cannot read it; ``--pdb-output`` writes the repaired structure as a PDB, which Prodes can. Run everything after this point, PROPKA included, on the repaired file.
 
@@ -518,7 +537,7 @@ It goes into the same environment as Prodes, and is already included if you buil
 
 or equivalently ``pip install propka``. Check it with ``propka3 --version``.
 
-PDB2PQR installs the same way, ``conda install conda-forge::pdb2pqr``, and is checked with ``pdb2pqr --version``. Prefer conda-forge to ``pip`` for that one; see `Installing as a user`_.
+PDB2PQR goes into a separate environment rather than this one, and is checked with ``conda run -n pdb2pqr pdb2pqr --version``. See `PDB2PQR, in its own environment`_.
 
 The three steps
 ~~~~~~~~~~~~~~~~

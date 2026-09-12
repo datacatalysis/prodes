@@ -14,11 +14,6 @@ dependencies:
   # per-residue pKa prediction is the recommended default workflow (see README),
   # and asking every user to install it separately just means most of them won't.
   - propka=3.5.1
-  # Recommended companion tool, not an import-time dependency: prodes never
-  # imports pdb2pqr, it reads the repaired PDB that pdb2pqr writes. Included
-  # here because running it first is the recommended workflow (see README), and
-  # because an unrepaired structure changes feature values silently.
-  - pdb2pqr=3.6.1
   - pip=26.0.1
   - setuptools=82.0.1
   - wheel=0.47.0
