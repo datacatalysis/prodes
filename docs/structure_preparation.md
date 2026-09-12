@@ -91,7 +91,7 @@ Then:
 mkdir prepared
 
 conda activate pdb2pqr
-pdb2pqr --ff=PARSE --pdb-output=prepared/1GDW.pdb 1GDW.pdb prepared/1GDW.pqr
+pdb2pqr --ff=PARSE --keep-chain --pdb-output=prepared/1GDW.pdb 1GDW.pdb prepared/1GDW.pqr
 
 conda activate prodes
 propka3 prepared/1GDW.pdb                    # the prepared file, not the download
@@ -104,6 +104,8 @@ Inside a script, `conda run -n pdb2pqr pdb2pqr ...` calls PDB2PQR in its own env
 `--pdb-output` is the flag that matters. The `.pqr` file is PDB2PQR's normal output and Prodes cannot read it; `--pdb-output` writes the prepared structure as a PDB, which Prodes can.
 
 **Keep the original file name and change the directory.** Prodes takes the `ID` column from the file name, so a prepared file called `1GDW_prep.pdb` labels that row `1GDW_prep`. Over a dataset that is tedious to undo.
+
+**`--keep-chain` is in the command on purpose.** It does not change the file Prodes reads, but it does change PDB2PQR's other output. See the section below.
 
 **PROPKA writes its `.pka` into the directory you are standing in**, named after the input's base name, not next to the input file. That is why the third line above reads `1GDW.pka` and not `prepared/1GDW.pka`.
 
@@ -126,6 +128,23 @@ What you should take from PDB2PQR is the **ordering**. It runs PROPKA after repa
 | PROPKA on the prepared file | 149 |
 
 The four extra groups are the two rebuilt lysine side chains and the two C-termini that only exist once `OXT` has been added. Among the 145 groups both runs share, six shift by more than 0.5 pKa units.
+
+## Chain identifiers
+
+Prodes needs chain identifiers. It groups residues by chain, decides which cysteines are bonded into a disulfide from the chain and residue number together, and applies per-residue pKa values by residue number. Flattening the chains would change all three.
+
+PDB2PQR writes two files, and they behave differently.
+
+| output | chain identifier |
+| --- | --- |
+| `--pdb-output`, the file Prodes reads | **always written**, with or without `--keep-chain` |
+| the `.pqr`, PDB2PQR's normal output | **blank** unless `--keep-chain` is given |
+
+The reason is in `io.print_biomolecule_atoms`: the PDB branch calls `atom.get_pdb_string()`, which takes no chain flag, while the PQR branch calls `atom.get_pqr_string(chainflag=chainflag)`.
+
+Verified rather than assumed. On structures of two, four, six and eight chains, the `--pdb-output` file carries every chain identifier, and running PDB2PQR with and without `--keep-chain` produces byte-for-byte identical PDB output. On the six-chain structure 1F6R, Prodes reads the same six chains, the same 727 residues and the same 24 disulfide bonds from the repaired file as from the original.
+
+So the flag is not required for this pipeline. It is in the documented command anyway, for two reasons: the `.pqr` is what APBS and the tools built on it consume, and nobody should have to remember which of two output files preserves what.
 
 ## Traps
 

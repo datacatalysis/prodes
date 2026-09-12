@@ -119,7 +119,7 @@ Run these four commands on your structure. PDB2PQR lives in its own environment,
     mkdir prepared
 
     conda activate pdb2pqr
-    pdb2pqr --ff=PARSE --pdb-output=prepared/1GDW.pdb 1GDW.pdb prepared/1GDW.pqr  # repair the structure
+    pdb2pqr --ff=PARSE --keep-chain --pdb-output=prepared/1GDW.pdb 1GDW.pdb prepared/1GDW.pqr  # repair
 
     conda activate prodes
     propka3 prepared/1GDW.pdb                                          # predict per-residue pKa values
@@ -354,7 +354,7 @@ This is the point of the whole exercise, so here is the shape of a complete QSPR
     for pdb in sorted(Path("structures").glob("*.pdb")):
         repaired = prepared / pdb.name
         subprocess.run(
-            ["conda", "run", "-n", "pdb2pqr", "pdb2pqr", "--ff=PARSE",
+            ["conda", "run", "-n", "pdb2pqr", "pdb2pqr", "--ff=PARSE", "--keep-chain",
              f"--pdb-output={repaired}", str(pdb), str(repaired.with_suffix(".pqr"))],
             check=True,
         )
@@ -455,12 +455,14 @@ Preparing your structure
 
     mkdir prepared
     conda activate pdb2pqr
-    pdb2pqr --ff=PARSE --pdb-output=prepared/1GDW.pdb 1GDW.pdb prepared/1GDW.pqr
+    pdb2pqr --ff=PARSE --keep-chain --pdb-output=prepared/1GDW.pdb 1GDW.pdb prepared/1GDW.pqr
     conda activate prodes
 
 Inside a script, ``conda run -n pdb2pqr pdb2pqr ...`` does the same thing without switching environments by hand.
 
 ``--pdb-output`` is the flag that matters. The ``.pqr`` file is PDB2PQR's normal output and Prodes cannot read it; ``--pdb-output`` writes the repaired structure as a PDB, which Prodes can. Run everything after this point, PROPKA included, on the repaired file.
+
+``--keep-chain`` keeps the chain identifier in the ``.pqr`` file, which PDB2PQR otherwise leaves blank. It makes no difference to the file Prodes reads, because ``--pdb-output`` always writes chains, but chain identifiers matter to Prodes and the flag costs nothing, so use it. See `chain identifiers`_.
 
 **Keep the original file name and change the directory, not the other way round.** Prodes takes the ``ID`` column of the output from the file name it was given (see `Input files`_), so a repaired file called ``1GDW_prep.pdb`` labels that row ``1GDW_prep``. Over a dataset that is tedious to undo.
 
@@ -511,6 +513,15 @@ Traps
 * **PDB2PQR can fail on sequence microheterogeneity.** Crambin (1CBN) has residue 22 modelled as both PRO and SER, and PDB2PQR 3.6.1 exits with ``Unable to debump biomolecule``. Prodes handles that case correctly on its own, so running it on the original file is a reasonable fallback when PDB2PQR refuses a structure.
 * **mmCIF input is unreliable.** PDB2PQR 3.6.1 accepts a ``.cif`` but produced an empty ``.pqr`` from a valid one in testing. Convert to PDB first.
 * **Be consistent within a dataset**, exactly as for PROPKA. Prepare all of your structures or none of them. This matters more than it looks: because structure predictors disagree about whether to write the C-terminal ``OXT``, a half-prepared dataset carries a systematic difference between its sources. See `the terminal oxygen <docs/structure_preparation.md>`_.
+
+Chain identifiers
+~~~~~~~~~~~~~~~~~~
+
+Prodes needs chain identifiers. It groups residues by chain, decides which cysteines are bonded into a disulfide using the chain and residue number together, and applies per-residue pKa values by residue number. A file whose chains have been flattened into one would change all three.
+
+**The file Prodes reads is safe.** ``--pdb-output`` always writes the chain identifier, whether or not ``--keep-chain`` is given: the two files are byte for byte identical. Checked on structures of two, four, six and eight chains, and on a six-chain structure the repaired file gives Prodes the same six chains, the same 727 residues and the same 24 disulfide bonds as the original.
+
+**PDB2PQR's own ``.pqr`` output is not.** There the chain column is blank unless ``--keep-chain`` is given. That file is what APBS and the tools built on it consume, so if you use the ``.pqr`` for anything, pass the flag. The documented commands pass it always, because remembering which of two output files preserves what is not a good use of anyone's attention.
 
 Full detail, including what Prodes discards and why: `preparing a structure <docs/structure_preparation.md>`_.
 
