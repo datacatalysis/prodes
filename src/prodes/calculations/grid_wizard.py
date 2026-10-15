@@ -138,8 +138,52 @@ class Grid:
         return content
 
 
-def property_points_on_surface(grid, to_consider="Surface_point"):
-    """Finds the property points on a surface"""
+def surface_cell_area_and_residue(cell, probe_r, dot_weights):
+    """Returns the area a cell's Shrake-Rupley dots stand for, and the residue owning most of it.
+
+    Each dot weighs what Atom.surface_area gives it, the atom's maximal
+    accessible area divided by its maximal number of dots, so the areas of all
+    the cells add up to Structure.surface_area over the same dots. The weight
+    is cached per atom in dot_weights, since a large protein has some 200,000
+    dots and a few thousand atoms.
+
+    The residue is the one whose dots carry the most area in the cell. On an
+    exact tie the alphabetically first label wins, so the assignment does not
+    depend on the order the dots were filed in.
+
+    Returns:
+        area: summed dot area in square angstrom.
+        residue: the winning residue's label, such as H100A, or "" when the
+            dots carry no residue.
+    """
+
+    area = 0.0
+    by_residue: dict = {}
+    for dot in cell.filtered_content("Surface_point"):
+        atom = dot.atom
+        weight = dot_weights.get(id(atom))
+        if weight is None:
+            weight = atom.max_area(probe_r=probe_r) / atom.max_n_points(probe_r=probe_r)
+            dot_weights[id(atom)] = weight
+        area += weight
+
+        label = atom.residue.label if atom.residue is not None else ""
+        by_residue[label] = by_residue.get(label, 0.0) + weight
+
+    residue = min(by_residue.items(), key=lambda item: (-item[1], item[0]))[0] if by_residue else ""
+
+    return area, residue
+
+
+def property_points_on_surface(grid, to_consider="Surface_point", probe_r=1.4):
+    """Finds the property points on a surface.
+
+    Each property point is one occupied cell, reached by a flood fill from the
+    first occupied cell through occupied neighbours. A surface component that
+    never touches that first one, such as an internal cavity, is not reached.
+    Each point carries the area its cell's dots stand for and the residue that
+    owns most of it; see surface_cell_area_and_residue.
+    """
 
     from prodes.core.point import Property_point
 
@@ -155,12 +199,14 @@ def property_points_on_surface(grid, to_consider="Surface_point"):
     surface_points = []
     done_ids = set()
     todo_cells = [start]
+    dot_weights: dict = {}
 
     while todo_cells:
         next_todo = []
         next_todo_ids = set()
         for cell in todo_cells:
-            surface_points.append(Property_point(cell.x, cell.y, cell.z))
+            area, residue = surface_cell_area_and_residue(cell, probe_r, dot_weights)
+            surface_points.append(Property_point(cell.x, cell.y, cell.z, area=area, residue=residue))
             done_ids.add(id(cell))
 
             surrounding = grid.find_surrounding_cells(cell)

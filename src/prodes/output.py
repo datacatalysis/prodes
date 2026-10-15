@@ -75,7 +75,11 @@ WHAT IS IN HERE
 
   {name}_features.csv              the calculated features, one row
   {name}_surface_points.csv        every surface point: x, y, z, potential,
-                                   hydrophobicity
+                                   hydrophobicity, the area it stands for, and
+                                   the residue owning most of that area; with
+                                   --patches also the neighbourhood averages
+                                   and the hydrophobic patch it belongs to
+                                   (-1 for none)
   {name}_ep.pml                    PyMOL, coloured by electrostatic potential
   {name}_hydrophobicity.pml        PyMOL, coloured by hydrophobicity
   {name}_ep.cxc                    ChimeraX, electrostatic potential
@@ -162,13 +166,17 @@ def run_metadata(pdb_file, settings, n_points, ep, disulfides=0, alternate_confo
     }
 
 
-def bundle_files(directory, name, features, coords, ep, lipo, pdb_file, metadata, hydro_scale):
-    """Writes every member of the bundle into an existing directory."""
+def bundle_files(directory, name, features, coords, ep, lipo, pdb_file, metadata, hydro_scale, point_columns=None):
+    """Writes every member of the bundle into an existing directory.
+
+    point_columns holds further per-point columns for the point table, in
+    order, such as the area and residue of each point.
+    """
 
     structure_file, point_file = f"{name}.pdb", f"{name}_ep.pdb"
 
     features.to_csv(directory / f"{name}_features.csv", index=False)
-    pd.DataFrame({"x": coords[:, 0], "y": coords[:, 1], "z": coords[:, 2], "ep_volts": ep, "hydrophobicity": lipo}).to_csv(
+    pd.DataFrame({"x": coords[:, 0], "y": coords[:, 1], "z": coords[:, 2], "ep_volts": ep, "hydrophobicity": lipo, **(point_columns or {})}).to_csv(
         directory / f"{name}_surface_points.csv", index=False
     )
 
@@ -206,7 +214,7 @@ def bundle_files(directory, name, features, coords, ep, lipo, pdb_file, metadata
     (directory / "README.txt").write_text(README.format(name=name, underline="=" * (len(name) + 26)))
 
 
-def read_member(bundle, suffix):
+def read_member(bundle, suffix, **read_csv_options):
     """Reads the one bundle member whose name ends in suffix, as a dataframe."""
 
     with zipfile.ZipFile(bundle) as archive:
@@ -216,7 +224,7 @@ def read_member(bundle, suffix):
             raise ValueError(f"{bundle} holds no member ending in {suffix}") from None
 
         with archive.open(name) as handle:
-            return pd.read_csv(handle)
+            return pd.read_csv(handle, **read_csv_options)
 
 
 def read_features(bundle):
@@ -230,12 +238,17 @@ def read_features(bundle):
 
 
 def read_surface_points(bundle):
-    """Reads the surface point table out of a bundle: coordinates, potential, hydrophobicity."""
+    """Reads the surface point table out of a bundle: coordinates, potential, hydrophobicity, area, residue.
 
-    return read_member(bundle, "_surface_points.csv")
+    The residue column is read as text, so that a label such as 100 from a
+    structure with no chain identifier stays the string "100", and a blank one
+    stays "" rather than becoming NaN.
+    """
+
+    return read_member(bundle, "_surface_points.csv", converters={"residue": str})
 
 
-def write_bundle(out_file, name, features, coords, ep, lipo, pdb_file, metadata, hydro_scale):
+def write_bundle(out_file, name, features, coords, ep, lipo, pdb_file, metadata, hydro_scale, point_columns=None):
     """Writes the bundle to out_file, which must be a .zip path.
 
     One structure in, one archive out. Supporting a directory as well would mean
@@ -254,7 +267,7 @@ def write_bundle(out_file, name, features, coords, ep, lipo, pdb_file, metadata,
     with TemporaryDirectory() as scratch:
         staged = Path(scratch) / name
         staged.mkdir()
-        bundle_files(staged, name, features, coords, ep, lipo, pdb_file, metadata, hydro_scale)
+        bundle_files(staged, name, features, coords, ep, lipo, pdb_file, metadata, hydro_scale, point_columns=point_columns)
 
         with zipfile.ZipFile(out_file, "w", zipfile.ZIP_DEFLATED) as archive:
             for member in sorted(staged.iterdir()):

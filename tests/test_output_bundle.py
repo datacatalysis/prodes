@@ -80,7 +80,7 @@ def test_the_tables_read_back_out_of_the_archive(bundle_zip):
 
     assert len(features) == 1
     assert features["ID"].iloc[0] == "ARH96693"
-    assert list(points.columns) == ["x", "y", "z", "ep_volts", "hydrophobicity"]
+    assert list(points.columns) == ["x", "y", "z", "ep_volts", "hydrophobicity", "area_A2", "residue"]
     assert len(points) > 0
 
 

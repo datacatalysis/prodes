@@ -11,6 +11,7 @@ import inspect
 
 import prodes
 from prodes import run as run_module
+from prodes.calculations.patches import PatchSettings
 from prodes.feature_dictionary import FULL_FEATURE_CODES, REDUCED_FEATURE_CODES
 from prodes.output import read_features
 
@@ -59,6 +60,7 @@ def test_arguments_are_forwarded(monkeypatch):
         hydro_scale="kd",
         full_features=True,
         mem_limit_mb=512,
+        patches=PatchSettings(radius=4.0),
     )
 
     assert captured == {
@@ -71,6 +73,7 @@ def test_arguments_are_forwarded(monkeypatch):
         "full_features": True,
         "mem_limit_mb": 512,
         "ionic_strength_molar": 0.15,
+        "patches": PatchSettings(radius=4.0),
     }
 
 

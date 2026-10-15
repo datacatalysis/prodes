@@ -11,6 +11,7 @@ import os
 
 import pytest
 
+from prodes.calculations.patches import PatchSettings
 from prodes.run import DEFAULT_IONIC_STRENGTH_MOLAR, calculate, main, parse_arguments
 
 
@@ -26,13 +27,14 @@ def test_defaults_are_the_documented_ones(monkeypatch):
     """A bare invocation gives the reduced feature set and no explicit memory budget."""
 
     monkeypatch.delenv("PRODES_FULL_FEATURES", raising=False)
-    pdb_file, out_file, pkas_file, ph, r_probe, hydro_scale, full_features, mem_limit_mb, ionic_strength_molar = parse(monkeypatch)
+    pdb_file, out_file, pkas_file, ph, r_probe, hydro_scale, full_features, mem_limit_mb, ionic_strength_molar, patches = parse(monkeypatch)
 
     assert (pdb_file, out_file, pkas_file) == ("in.pdb", "out.zip", None)
     assert (ph, r_probe, hydro_scale) == (7, 1.4, "mj_scaled")
     assert full_features is False
     assert mem_limit_mb is None
     assert ionic_strength_molar == DEFAULT_IONIC_STRENGTH_MOLAR
+    assert patches is None
 
 
 def test_n_workers_flag_sets_the_environment_variable(monkeypatch):
@@ -56,7 +58,7 @@ def test_chunksize_flag_sets_the_environment_variable(monkeypatch):
 def test_mem_limit_flag_is_returned_rather_than_exported(monkeypatch):
     """--mem-limit is passed to calculate directly, so it does not need the environment."""
 
-    *_, mem_limit_mb, _ionic_strength = parse(monkeypatch, "--mem-limit", "256")
+    *_, mem_limit_mb, _ionic_strength, _patches = parse(monkeypatch, "--mem-limit", "256")
 
     assert mem_limit_mb == 256
 
@@ -108,6 +110,7 @@ def test_main_forwards_every_parsed_argument(monkeypatch, tmp_path):
         True,
         None,
         DEFAULT_IONIC_STRENGTH_MOLAR,
+        None,
     )
     assert captured["kwargs"] == {}
 
@@ -125,4 +128,62 @@ def test_calculate_signature_matches_the_parsed_order():
         "full_features",
         "mem_limit_mb",
         "ionic_strength_molar",
+        "patches",
     ]
+
+
+def test_patches_flag_builds_the_settings(monkeypatch, tmp_path):
+    """--patches and its options reach calculate as one PatchSettings, residue sets read from file."""
+
+    labels = tmp_path / "cdr.txt"
+    labels.write_text("# CDR H3\nH95\nH100A  # an insertion\n\nL91\n")
+    *_, patches = parse(
+        monkeypatch,
+        "--patches",
+        "--patch-radius",
+        "4",
+        "--patch-min-area",
+        "30",
+        "--patch-hydrophobic-threshold",
+        "0.02",
+        "--patch-ep-threshold",
+        "0.3",
+        "--residue-set",
+        f"CDR={labels}",
+    )
+
+    assert patches == PatchSettings(radius=4, min_area=30, hydrophobic_threshold=0.02, ep_threshold=0.3, residue_sets={"CDR": ["H95", "H100A", "L91"]})
+
+
+def test_residue_set_without_patches_is_refused(monkeypatch, tmp_path):
+    """A residue set restricts the patch features, so on its own it would silently do nothing."""
+
+    labels = tmp_path / "cdr.txt"
+    labels.write_text("H95\n")
+
+    with pytest.raises(ValueError, match="need --patches"):
+        parse(monkeypatch, "--residue-set", f"CDR={labels}")
+
+
+@pytest.mark.parametrize("specification", ["CDR", "=cdr.txt", "CDR="])
+def test_a_malformed_residue_set_is_refused(monkeypatch, specification):
+    """NAME=FILE is the only accepted form."""
+
+    with pytest.raises(ValueError, match="NAME=FILE"):
+        parse(monkeypatch, "--patches", "--residue-set", specification)
+
+
+@pytest.mark.parametrize(
+    "option", [["--patch-radius", "3"], ["--patch-min-area", "80"], ["--patch-hydrophobic-threshold", "0.1"], ["--patch-ep-threshold", "0.2"]]
+)
+def test_a_patch_option_without_patches_is_refused(monkeypatch, option):
+    """Otherwise the option would be accepted and silently do nothing."""
+
+    with pytest.raises(ValueError, match=f"{option[0]} only apply to the patch features"):
+        parse(monkeypatch, *option)
+
+
+def test_patches_alone_gives_the_documented_defaults(monkeypatch):
+    *_, patches = parse(monkeypatch, "--patches")
+
+    assert patches == PatchSettings()

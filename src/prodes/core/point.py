@@ -40,12 +40,17 @@ class Surface_point:
 class Property_point:
     """Class which represents the points onto which properties are projected"""
 
-    def __init__(self, x, y, z, ep=None, lipo=None):
+    def __init__(self, x, y, z, ep=None, lipo=None, area=0.0, residue=""):
         self.x = x
         self.y = y
         self.z = z
         self.__ep = ep
         self.__lipo = lipo
+        # Square angstrom of solvent accessible surface this point stands for,
+        # and the label of the residue owning most of it. Set by
+        # prodes.calculations.grid_wizard.property_points_on_surface.
+        self.area = area
+        self.residue = residue
 
     @property
     def ep(self):

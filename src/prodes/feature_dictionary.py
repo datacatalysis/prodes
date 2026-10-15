@@ -54,6 +54,12 @@ output of ``calculate()``.
 
 Why the other 51 are dropped by default is set out in
 ``docs/redundant_feature_analysis.md``.
+
+A third file, ``features_patches.yaml``, documents the surface patch features,
+which are written only when the patch step is switched on (``--patches``). They
+are in neither list above; ``get_patch_feature_codes`` returns them, and every
+getter also accepts a patch code with a residue set suffix, such as
+``SurfMhpPatchArea_CDR``. The method is in ``docs/surface_patches.md``.
 """
 
 import importlib.resources
@@ -65,13 +71,14 @@ ID_COLUMN = "ID"
 
 REDUCED_DICTIONARY_FILE = "features_reduced.yaml"
 FULL_ONLY_DICTIONARY_FILE = "features_full_only.yaml"
+PATCH_DICTIONARY_FILE = "features_patches.yaml"
 
 
-def _read_features(filename: str) -> dict:
-    """Returns the ``features`` mapping of one YAML dictionary file."""
+def _read_features(filename: str, key: str = "features") -> dict:
+    """Returns one mapping, ``features`` by default, of one YAML dictionary file."""
 
     with importlib.resources.open_text("prodes.data", filename, encoding="utf-8") as handle:
-        return yaml.safe_load(handle)["features"]
+        return yaml.safe_load(handle)[key]
 
 
 # Each file is read exactly once, at import. The two are kept as separate dicts
@@ -93,6 +100,39 @@ DROPPED_FEATURE_CODES = tuple(_FULL_ONLY_ENTRIES)
 #: ``--full-features`` run, which interleaves the two; read the CSV header if you
 #: need that.
 FULL_FEATURE_CODES = REDUCED_FEATURE_CODES + DROPPED_FEATURE_CODES
+
+# The patch features are a separate block, written only when the patch step is
+# switched on, so they are kept out of the reduced and full sets above.
+_PATCH_ENTRIES = _read_features(PATCH_DICTIONARY_FILE)
+_RESIDUE_SET_ONLY_ENTRIES = _read_features(PATCH_DICTIONARY_FILE, "residue_set_only_features")
+
+#: The whole-surface patch features, in the order Prodes writes them. With a
+#: residue set NAME, each is written again as ``<code>_NAME``.
+PATCH_FEATURE_CODES = tuple(_PATCH_ENTRIES)
+
+
+def residue_set_feature_codes(name: str) -> list[str]:
+    """Returns the columns Prodes writes for the residue set NAME, in output order."""
+
+    return [f"{code}_{name}" for code in (*_RESIDUE_SET_ONLY_ENTRIES, *PATCH_FEATURE_CODES)]
+
+
+def _patch_entry(feature_code: str) -> dict | None:
+    """Returns the entry of a patch code, either whole-surface or ``<code>_NAME``, or None.
+
+    Only patch codes take a residue set suffix, so ``Area_CDR`` is not resolved
+    to ``Area``.
+    """
+
+    if feature_code in _PATCH_ENTRIES:
+        return _PATCH_ENTRIES[feature_code]
+
+    code, separator, name = feature_code.rpartition("_")
+    # The rule PatchSettings applies to a set name: ASCII letters and digits.
+    if separator and name.isascii() and name.isalnum():
+        return _PATCH_ENTRIES.get(code) or _RESIDUE_SET_ONLY_ENTRIES.get(code)
+
+    return None
 
 
 class FeatureDictionary:
@@ -117,7 +157,7 @@ class FeatureDictionary:
         return f"{type(self).__name__}({len(REDUCED_FEATURE_CODES)} reduced, {len(FULL_FEATURE_CODES)} full feature codes)"
 
     def __contains__(self, feature_code: str) -> bool:
-        return feature_code in self._entries
+        return feature_code in self._entries or _patch_entry(feature_code) is not None
 
     # --- the feature code lists -------------------------------------------------
 
@@ -137,6 +177,20 @@ class FeatureDictionary:
         """
 
         return list(FULL_FEATURE_CODES if full else REDUCED_FEATURE_CODES)
+
+    def get_patch_feature_codes(self, residue_sets=()) -> list[str]:
+        """Returns the patch feature codes a run with the patch step writes, in output order.
+
+        Args:
+            residue_sets: the names of the residue sets of the run, in the order
+                they were given.
+        """
+
+        codes = list(PATCH_FEATURE_CODES)
+        for name in residue_sets:
+            codes.extend(residue_set_feature_codes(name))
+
+        return codes
 
     def get_dropped_feature_codes(self) -> list[str]:
         """Returns the feature codes in the full set that the reduced set leaves out."""
@@ -211,15 +265,22 @@ class FeatureDictionary:
             (``dropped_because``, ``redundant_with``, ``drop_note``).
         """
 
-        try:
+        if feature_code in self._entries:
             return dict(self._entries[feature_code])
-        except KeyError as err:
-            raise KeyError(
-                f"{feature_code!r} is not a Prodes feature code. Use get_feature_codes(full=True) for the {len(FULL_FEATURE_CODES)} valid codes."
-            ) from err
+
+        entry = _patch_entry(feature_code)
+        if entry is not None:
+            return dict(entry)
+
+        raise KeyError(
+            f"{feature_code!r} is not a Prodes feature code. Use get_feature_codes(full=True) for the {len(FULL_FEATURE_CODES)} "
+            "valid codes, and get_patch_feature_codes() for the patch features."
+        )
 
     def get_dictionary(self) -> dict:
-        """Returns every entry, keyed by feature code.
+        """Returns every entry of the reduced and full sets, keyed by feature code.
+
+        The patch features are not included; get_entry looks them up.
 
         Returns:
             A new dict of new dicts, safe to mutate.

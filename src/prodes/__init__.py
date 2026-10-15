@@ -13,6 +13,7 @@ def run_prodes(
     full_features=False,
     mem_limit_mb=None,
     ionic_strength_molar=run.DEFAULT_IONIC_STRENGTH_MOLAR,
+    patches=None,
 ):
     """Runs Prodes similar as the commandline tool.
 
@@ -36,6 +37,9 @@ def run_prodes(
         mem_limit_mb: memory budget in MB for the intermediate NumPy arrays of this
             run, divided among the workers. Pass explicitly in worker processes
             rather than relying on the PRODES_MEM_LIMIT_MB environment variable.
+        patches: a prodes.calculations.patches.PatchSettings to also report
+            contiguous surface patches, optionally over named residue sets.
+            None leaves them out.
     """
 
     calculate(
@@ -48,6 +52,7 @@ def run_prodes(
         full_features=full_features,
         mem_limit_mb=mem_limit_mb,
         ionic_strength_molar=ionic_strength_molar,
+        patches=patches,
     )
 
 
