@@ -111,6 +111,17 @@ The budget covers the chunked arrays only. The parsed structure, the grids and t
 
 When running several proteins side by side, one process each, RAM is **cumulative** across those processes: each one gets its own budget. Divide the machine's memory by the number of concurrent runs, and leave headroom for the operating system.
 
+### A run that stops with no traceback
+
+A Python error in a worker is reported, and the phase is repeated serially with a warning naming it. A run that ends with a non-zero exit code, no traceback and no bundle was instead stopped by a signal. Under `subprocess`, the return code is the negative signal number:
+
+| Return code | Signal | Usual cause |
+| --- | --- | --- |
+| -9 (137 from a shell) | SIGKILL | the kernel's out-of-memory killer, or a scheduler enforcing a limit |
+| -11 (139 from a shell) | SIGSEGV | a crash in compiled code |
+
+The command line enables Python's `faulthandler`, so a crash in compiled code prints the Python stack to stderr before the process exits. A SIGKILL cannot be caught by any process, so it leaves nothing behind; record the return code, and check `dmesg` or `journalctl -k` for `Out of memory` at that time. Several Prodes runs side by side each have their own memory budget, and the structure, grids and surface points come on top of it.
+
 ## BLAS threads
 
 Workers force single-threaded BLAS on themselves (`OPENBLAS_NUM_THREADS=1` and friends, applied via `threadpoolctl`), and the parent is held to one thread for as long as the workers exist. This is deliberate: parallelism should happen across processes rather than within them, and letting BLAS spawn its own threads inside each worker would oversubscribe the machine badly.

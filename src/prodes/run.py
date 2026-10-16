@@ -1,4 +1,5 @@
 import argparse
+import faulthandler
 import math
 import os
 
@@ -678,6 +679,11 @@ def calculate(
 
 
 def main():
+    # A crash in compiled code would otherwise end the run with no message at
+    # all; this prints the Python stack of every thread to stderr first. Forked
+    # workers inherit it. A SIGKILL, such as from the out-of-memory killer,
+    # cannot be caught by anything.
+    faulthandler.enable()
     parsed_arguments = parse_arguments()
     # Positional, so a new option of calculate has to be appended to both
     # signatures in the same place; tests/test_cli.py pins the order.
