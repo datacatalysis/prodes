@@ -43,7 +43,7 @@ Finding patches on the whole surface and then restricting them means a patch tha
 | Setting | CLI | Default | Notes |
 | --- | --- | --- | --- |
 | `radius` | `--patch-radius` | 5.0 A | Radius of the local average, at most 15 A. The cost of the average grows with the cube of the radius. |
-| `min_area` | `--patch-min-area` | 100.0 A^2 | Smallest patch kept. A starting value; see below. |
+| `min_area` | `--patch-min-area` | 100.0 A^2 | Smallest patch kept; see below. |
 | `hydrophobic_threshold` | `--patch-hydrophobic-threshold` | 0.0 | The sign of the local hydrophobicity. Refused for a scale with no negative values, where 0 would mark every point hydrophobic; pass a threshold explicitly there. |
 | `ep_threshold` | `--patch-ep-threshold` | 0.5 V | Applied symmetrically to positive and negative patches. |
 | `residue_sets` | `--residue-set NAME=FILE` | none | Repeatable. `NAME` is letters and digits only. |
@@ -52,11 +52,15 @@ The `--patch-*` and `--residue-set` options are refused without `--patches`, sin
 
 The hydrophobicity scale is the run's `--hydro` setting. The thresholds are in the units of the local value, so a threshold chosen for one scale does not carry over to another.
 
-The defaults are starting values to be tuned against measured data, not calibrated choices:
+The defaults were checked against antibody HIC retention time on the GDPa1 panel (236 antibodies). Settings tuned on that panel raised the correlation there but not on the held-out GDPa3 panel (79 antibodies), so the defaults were kept. Any re-tuning needs an independent panel to check it on.
+
+The tuning searched radius 3 to 12 A, minimum area 0 to 500 A^2, hydrophobic threshold -0.08 to 0.06 and electrostatic threshold 0.1 to 1.0 V, with patches on ABodyBuilder3 Fv models and residue sets for the CDRs and the Fv. The best setting on GDPa1 (radius 3 A, minimum area 0, hydrophobic threshold -0.06, electrostatic threshold 0.1 V) raised the Spearman R of `SurfMhpPatchArea_CDR` against retention time from 0.34 to 0.46 there, but lowered it from 0.355 to 0.328 on GDPa3. A random-forest HIC model on sequence features plus the Prodes columns, fitted on GDPa1, scored a Spearman R of 0.589 on GDPa3 with the tuned setting against 0.615 with the defaults, lower on all five random-forest seeds. Choosing the setting inside each training fold of GDPa1 instead gave 0.579 against 0.581 on its own five published folds.
+
+How each default was arrived at:
 
 - **Minimum area.** Areas here are solvent accessible surface areas with a 1.4 A probe, which are larger than molecular surface areas of the same region, and by an amount that depends on curvature, so a minimum area quoted by a tool that measures on a molecular surface does not transfer to this one. 100 A^2 is about half the solvent accessible area of one fully exposed phenylalanine residue, 210 to 240 A^2 (Tien et al., PLoS ONE 2013): a patch has to be larger than the exposed half of one large hydrophobic side chain.
 - **Electrostatic threshold.** At 0 V, the surface with the same sign as the net charge becomes one or two patches covering most of the protein, and the patch area then says little beyond `NSurfPosEpFormal` or the total area. 0.5 V was chosen from the local potential at the default ionic strength of 0.15 M on the eight structures in `tests/data` (1AO6, 1CBN, 1GDW, 1GPB, 1PIT, 4NZU, ARH96693 and ARH98503): over those structures the median of the 75th percentile of the absolute local potential was 0.39 V and the median of the 90th percentile 0.61 V. At 0.5 V the marked points covered between 13 and 26 per cent of the surface area on six of the eight structures, 2 per cent on 1CBN and 32 per cent on 1PIT. The potential is a screened Coulomb sum at a relative permittivity of 4, so thresholds from Poisson-Boltzmann tools, usually given in kT/e, do not carry over.
-- **Hydrophobic threshold.** 0 on `mj_scaled` separates hydrophobic from hydrophilic residues. It is lower than the 0.03 the hydrophobicity viewer uses to colour points, because the viewer shows the per-point value and the patches use the local value, whose range is narrower. The local value on `mj_scaled` is negative over most of a typical surface, so at 0 only the few most hydrophobic regions pass, and the hydrophobic patch area changes steeply with the threshold. Choose it against measured data rather than relying on the default.
+- **Hydrophobic threshold.** 0 on `mj_scaled` separates hydrophobic from hydrophilic residues. It is lower than the 0.03 the hydrophobicity viewer uses to colour points, because the viewer shows the per-point value and the patches use the local value, whose range is narrower. The local value on `mj_scaled` is negative over most of a typical surface, so at 0 only the few most hydrophobic regions pass, and the hydrophobic patch area changes steeply with the threshold.
 
 All settings, with the hydrophobic threshold resolved and every residue set's labels, are recorded in `prodes_run.json` under `settings.patches`.
 

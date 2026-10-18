@@ -27,7 +27,7 @@ DEFAULT_PATCH_RADIUS = 5.0
 
 #: Patches smaller than this, in square angstrom of solvent accessible surface,
 #: are discarded: about half the solvent accessible area of one fully exposed
-#: phenylalanine. A starting value; see docs/surface_patches.md.
+#: phenylalanine. Checked against antibody HIC data and kept; see docs/surface_patches.md.
 DEFAULT_PATCH_MIN_AREA = 100.0
 
 #: The largest radius accepted. The neighbourhood average reads the whole point

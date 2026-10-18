@@ -286,7 +286,7 @@ Surface patches
 
     prodes Fv.pdb Fv.zip --patches --residue-set CDR=cdr_residues.txt
 
-The default 54 columns are unchanged by the flag; the patch columns are appended after them. The thresholds and the minimum patch area are settings with starting values rather than calibrated choices. Method, settings, columns and limitations: `surface patches <docs/surface_patches.md>`_.
+The default 54 columns are unchanged by the flag; the patch columns are appended after them. The thresholds and the minimum patch area are settings; their defaults were checked against antibody HIC data and kept, because settings tuned on one antibody panel did worse on a held-out one. Method, settings, columns and limitations: `surface patches <docs/surface_patches.md>`_.
 
 Looking features up from Python
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
