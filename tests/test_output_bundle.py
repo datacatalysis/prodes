@@ -80,7 +80,7 @@ def test_the_tables_read_back_out_of_the_archive(bundle_zip):
 
     assert len(features) == 1
     assert features["ID"].iloc[0] == "ARH96693"
-    assert list(points.columns) == ["x", "y", "z", "ep_volts", "hydrophobicity"]
+    assert list(points.columns) == ["x", "y", "z", "ep_volts", "hydrophobicity", "area_A2", "residue", "local_mhp", "local_ep_volts", "mhp_patch_id"]
     assert len(points) > 0
 
 
@@ -106,6 +106,7 @@ def test_the_run_record_says_what_was_run(bundle_dir):
         "hydro_scale": "mj_scaled",
         "full_features": False,
         "ionic_strength_molar": 0.15,
+        "patches": {"radius_A": 5.0, "min_area_A2": 100.0, "hydrophobic_threshold": 0.0, "ep_threshold_volts": 0.5, "residue_sets": {}},
     }
     # ARH96693 is an AlphaFold model with three cysteines and no disulfide, so
     # the key has to be present and zero rather than absent.

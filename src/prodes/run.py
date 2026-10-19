@@ -1,4 +1,5 @@
 import argparse
+import faulthandler
 import math
 import os
 
@@ -8,6 +9,14 @@ from dotenv import load_dotenv
 
 from prodes.calculations import geometry, grid_wizard
 from prodes.calculations.distance_functions import debye_length
+from prodes.calculations.patches import (
+    DEFAULT_EP_THRESHOLD,
+    DEFAULT_PATCH_MIN_AREA,
+    DEFAULT_PATCH_RADIUS,
+    PatchSettings,
+    calculate_patch_features,
+    check_residue_sets,
+)
 from prodes.calculations.sasa import shape, shrake_rupley
 from prodes.calculations.standard_equations import trimean
 from prodes.io import parser as ps
@@ -61,6 +70,30 @@ def parse_arguments():
     )
     parser.add_argument("--hydro", help="Abbreviation of the hydrophobicity scale to be used", type=str, default="mj_scaled")
     parser.add_argument(
+        "--residue-set",
+        action="append",
+        default=[],
+        metavar="NAME=FILE",
+        help="Also report every surface patch feature restricted to the residues listed in FILE, one label "
+        "such as H100A per line, under columns ending in _NAME. Repeatable; see docs/surface_patches.md",
+    )
+    parser.add_argument(
+        "--patch-radius", type=float, default=DEFAULT_PATCH_RADIUS, help=f"Neighbourhood radius in A for the patch average (default: {DEFAULT_PATCH_RADIUS})"
+    )
+    parser.add_argument("--patch-min-area", type=float, default=DEFAULT_PATCH_MIN_AREA, help=f"Smallest patch kept, in A^2 (default: {DEFAULT_PATCH_MIN_AREA})")
+    parser.add_argument(
+        "--patch-hydrophobic-threshold",
+        type=float,
+        default=None,
+        help="Neighbourhood-averaged hydrophobicity above which a point is hydrophobic (default: 0; required with a scale that has no negative values, such as mj)",
+    )
+    parser.add_argument(
+        "--patch-ep-threshold",
+        type=float,
+        default=DEFAULT_EP_THRESHOLD,
+        help=f"Neighbourhood-averaged potential in volts beyond which a point is positive or negative (default: {DEFAULT_EP_THRESHOLD})",
+    )
+    parser.add_argument(
         "--full-features",
         action=argparse.BooleanOptionalAction,
         default=env_full,
@@ -113,7 +146,37 @@ def parse_arguments():
     if not math.isfinite(ionic_strength_molar) or ionic_strength_molar < 0:
         raise ValueError(f"--ionic-strength must be a finite number and not negative, got {ionic_strength_molar}")
 
-    return pdb_file, out_file, pkas_file, ph, r_probe, hydro_scale, full_features, mem_limit_mb, ionic_strength_molar
+    patches = PatchSettings(
+        radius=arg.patch_radius,
+        min_area=arg.patch_min_area,
+        hydrophobic_threshold=arg.patch_hydrophobic_threshold,
+        ep_threshold=arg.patch_ep_threshold,
+        residue_sets=read_residue_sets(arg.residue_set),
+    )
+
+    return pdb_file, out_file, pkas_file, ph, r_probe, hydro_scale, full_features, mem_limit_mb, ionic_strength_molar, patches
+
+
+def read_residue_sets(specifications):
+    """Reads the --residue-set NAME=FILE options into a name to labels mapping.
+
+    Each file holds one residue label per line, such as H100A. Blank lines and
+    anything after a # are ignored.
+    """
+
+    residue_sets = {}
+    for specification in specifications:
+        name, separator, path = specification.partition("=")
+        if not separator or not name or not path:
+            raise ValueError(f"--residue-set takes NAME=FILE, got {specification!r}")
+        if name in residue_sets:
+            raise ValueError(f"--residue-set {name} is given twice")
+
+        with open(path, encoding="utf-8") as handle:
+            labels = [line.split("#", 1)[0].strip() for line in handle]
+        residue_sets[name] = [label for label in labels if label]
+
+    return residue_sets
 
 
 def standard_features(values, name="", reduced=False):
@@ -475,7 +538,7 @@ def construct_surface_grid(structure, r_probe):
     surface_grid.construct_cells(surface)
     surface_grid.fill_cells(surface)
 
-    property_points = grid_wizard.property_points_on_surface(surface_grid)
+    property_points = grid_wizard.property_points_on_surface(surface_grid, probe_r=r_probe)
 
     return property_points
 
@@ -490,6 +553,7 @@ def calculate(
     full_features=False,
     mem_limit_mb=None,
     ionic_strength_molar=DEFAULT_IONIC_STRENGTH_MOLAR,
+    patches=None,
 ):
     """Calculates a list of supported features and returns a csv file
 
@@ -512,6 +576,10 @@ def calculate(
             run, divided among the workers. If None, falls back to the
             PRODES_MEM_LIMIT_MB env var (default 2048). Pass explicitly when calling
             as a library to avoid relying on environment variables.
+        patches: a prodes.calculations.patches.PatchSettings for the surface
+            patch features, such as residue sets to restrict them to. None, the
+            default, means PatchSettings(): the default settings and no
+            residue sets. The patch features are part of every run.
 
     Thread safety
         Safe to run in several processes, one structure each, which is how the
@@ -523,7 +591,15 @@ def calculate(
 
     validate_settings(mem_limit_mb)
 
+    if patches is None:
+        patches = PatchSettings()
+    # Checked before the structure is read, since the threshold depends only on
+    # the scale; the residue labels are checked as soon as it has been read.
+    # Both checks are cheap, and the surface phase that follows is not.
+    patches.resolved_hydrophobic_threshold(hydro_scale)
+
     structure = prepare_structure(pdb_file, pkas_file)
+    check_residue_sets(patches.residue_sets, [residue.label for residue in structure.residues])
     # Reported before the slow phases, so that a structure whose disulfides were
     # not found can be spotted without waiting for the run to finish.
     print(f"{structure.name}: {len(structure.disulfides)} disulfide bonds detected")
@@ -540,10 +616,29 @@ def calculate(
     # formal charges, so a snapshot taken afterwards would hold a different
     # physical quantity under the same name, and only when --full-features is set.
     coords, ep, lipo = surface_point_arrays(surface_points)
+    areas = np.array([point.area for point in surface_points])
+    residues = np.array([point.residue for point in surface_points])
+    point_columns = {"area_A2": areas, "residue": residues}
+
+    # Computed from the snapshot above, so the average charge phase overwriting
+    # the potential on the points cannot reach it, and appended after the shell
+    # features, which is their place in features_reduced.yaml.
+    patch_features, patch_columns = calculate_patch_features(
+        coords,
+        areas,
+        residues,
+        lipo,
+        ep,
+        patches,
+        hydro_scale,
+        [residue.label for residue in structure.residues],
+    )
+    point_columns.update(patch_columns)
 
     if full_features:
         features = calculate_average_chargesurface_grid_features(structure, surface_points, ph, features, ionic_strength_molar=ionic_strength_molar)
     features = calculate_shell_features(structure, surface_points, ph, features, full_features=full_features, mem_limit_mb=mem_limit_mb)
+    features.update(patch_features)
 
     calculated_features = pd.Series(features).to_frame().transpose()
     settings = {
@@ -552,6 +647,7 @@ def calculate(
         "hydro_scale": hydro_scale,
         "full_features": full_features,
         "ionic_strength_molar": ionic_strength_molar,
+        "patches": patches.record(hydro_scale),
     }
     metadata = run_metadata(
         pdb_file,
@@ -564,11 +660,18 @@ def calculate(
         inferred_elements=structure.inferred_elements,
     )
 
-    return write_bundle(out_file, structure.name, calculated_features, coords, ep, lipo, pdb_file, metadata, hydro_scale)
+    return write_bundle(out_file, structure.name, calculated_features, coords, ep, lipo, pdb_file, metadata, hydro_scale, point_columns=point_columns)
 
 
 def main():
+    # A crash in compiled code would otherwise end the run with no message at
+    # all; this prints the Python stack of every thread to stderr first. Forked
+    # workers inherit it. A SIGKILL, such as from the out-of-memory killer,
+    # cannot be caught by anything.
+    faulthandler.enable()
     parsed_arguments = parse_arguments()
+    # Positional, so a new option of calculate has to be appended to both
+    # signatures in the same place; tests/test_cli.py pins the order.
     calculate(*parsed_arguments)
 
 

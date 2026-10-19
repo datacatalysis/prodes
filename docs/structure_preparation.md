@@ -47,6 +47,8 @@ Only the **geometry**. Prodes reads `ATOM` records, filters out hydrogens, and r
 
 So the hydrogens PDB2PQR adds, the protonation states it assigns and the partial charges it writes are all discarded. That is deliberate: it is what lets you run Prodes at several pH values against one prepared structure. What you gain from the preparation step is that the atoms are there and in sensible positions.
 
+A structure without hydrogens is therefore a valid input. Stripping all 1,625 hydrogens from an ABodyBuilder3 Fv model, with the same pKa file, left every one of the 77 feature columns of a run with a CDR residue set unchanged. What does change the values is a missing heavy atom, and on a predicted structure that is almost always `OXT`; see the next section.
+
 ## What happens to a predicted structure: the terminal oxygen
 
 Run PDB2PQR over a set of predicted structures and you will usually see it add exactly one atom to each, and nothing else. That atom is `OXT`, and it is worth understanding because of what Prodes currently does with it.
@@ -128,6 +130,11 @@ What you should take from PDB2PQR is the **ordering**. It runs PROPKA after repa
 | PROPKA on the prepared file | 149 |
 
 The four extra groups are the two rebuilt lysine side chains and the two C-termini that only exist once `OXT` has been added. Among the 145 groups both runs share, six shift by more than 0.5 pKa units.
+
+A group PROPKA does not report keeps the textbook pKa of its residue type, and Prodes names every such group in one warning per run, such as `6 titratable groups are not in the pKa file and keep the textbook value for their residue type: C- A451, ...`. Two causes account for most of them, and neither is `convert_propka` dropping a value: the group is absent from PROPKA's own output.
+
+* **A C-terminus without `OXT`.** PROPKA reports no `C-` group for a chain whose last residue has no `OXT`. Running PDB2PQR first adds it.
+* **An aspartate as the first residue of a chain.** PROPKA 3.5.1 reports the N-terminal `N+` group of such a chain but no side-chain pKa for the aspartate, while it does report one for an N-terminal glutamate. Seen on the light chains of whole antibodies, which commonly start with Asp. Structure preparation does not change this.
 
 ## Chain identifiers
 

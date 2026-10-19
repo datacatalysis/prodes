@@ -24,6 +24,7 @@ import pandas as pd
 from prodes.calculations import sasa
 from prodes.calculations.geometry import Sunflower_sphere
 from prodes.calculations.grid_wizard import Grid
+from prodes.feature_dictionary import PATCH_FEATURE_CODES
 from prodes.io import parser as ps
 from tests.pipeline_output import pipeline_output
 
@@ -59,10 +60,13 @@ ORIGINAL_OUTPUT = pd.read_csv(ORIG_OUTPUT)
 
 
 def test_all_columns_present():
-    """Every column in the original output should appear in the calculated output."""
+    """Every column in the original output should appear in the calculated output.
+
+    The only columns the original did not write are the surface patch features.
+    """
     calc_cols = set(FULL_OUTPUT.columns)
     orig_cols = set(ORIGINAL_OUTPUT.columns)
-    assert calc_cols == orig_cols, f"Column mismatch: missing={orig_cols - calc_cols}, extra={calc_cols - orig_cols}"
+    assert calc_cols - set(PATCH_FEATURE_CODES) == orig_cols, f"Column mismatch: missing={orig_cols - calc_cols}, extra={calc_cols - orig_cols}"
 
 
 def test_feature_values_match_original():

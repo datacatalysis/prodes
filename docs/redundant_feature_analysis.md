@@ -138,6 +138,8 @@ the README for how to enable them and when that is advisable.
 
 Every distinct physical property the original calculates is still represented. What is gone is the second, third and fourth summary statistic of the same distribution, and the second charge model applied to the same surface.
 
+From version 10.0 the default set also holds the 11 surface patch features after these 54, 65 in all; see `docs/surface_patches.md`. They were added because they improved a model of antibody hydrophobic interaction chromatography retention on a held-out panel, and were not part of the R² analysis on this page, so whether any of them is redundant with the 54 has not been measured.
+
 ### Why the reduced set is the default
 
 The original package calculates all 105 features and leaves feature selection to the user. Tim Neijenhuis, the original author, makes the fair point that anyone building a model can simply pick the subset they need later, and for an experienced modeller that is exactly right.

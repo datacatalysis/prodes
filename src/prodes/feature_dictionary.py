@@ -25,9 +25,10 @@ set under ``--full-features``. Both code lists are available, so a pipeline can
 line up datasets calculated under either setting without re-running Prodes or
 diffing CSV headers by hand:
 
-    fd.get_feature_codes()             # the 54 written by default
-    fd.get_feature_codes(full=True)    # the 105 legacy columns
+    fd.get_feature_codes()             # the 65 written by default
+    fd.get_feature_codes(full=True)    # the 116: the 105 legacy columns and the 11 patch ones
     fd.get_dropped_feature_codes()     # the 51 the default leaves out
+    fd.get_feature_codes(residue_sets=["CDR"])  # plus the columns of a residue set
 
     # cut a full-feature CSV down so it lines up with a reduced-feature one
     df = fd.drop_redundant_features(pd.read_csv("full_output.csv"))
@@ -41,7 +42,7 @@ you need the exact order.
 :data:`ID_COLUMN` when you need it.
 
 Everything, including which feature codes exist, comes from two human-readable
-YAML files in ``prodes/data``: ``features_reduced.yaml`` for the 54 calculated by
+YAML files in ``prodes/data``: ``features_reduced.yaml`` for the 65 calculated by
 default and ``features_full_only.yaml`` for the other 51, the latter carrying the
 reason each one was dropped. Those files are the single source of truth, so the
 list of features is never written down twice and cannot disagree with itself. Each
@@ -54,6 +55,14 @@ output of ``calculate()``.
 
 Why the other 51 are dropped by default is set out in
 ``docs/redundant_feature_analysis.md``.
+
+The last 11 of the default features are the surface patch features, marked
+``per_residue_set`` in ``features_reduced.yaml``. A run given a residue set NAME
+writes each of them a second time as ``<code>_NAME``, preceded by
+``SurfArea_NAME``. ``get_patch_feature_codes`` returns the 11, every getter also
+accepts a patch code with a residue set suffix, such as ``SurfMhpPatchArea_CDR``,
+and ``get_feature_codes(residue_sets=...)`` includes the suffixed columns. The
+method is in ``docs/surface_patches.md``.
 """
 
 import importlib.resources
@@ -67,11 +76,11 @@ REDUCED_DICTIONARY_FILE = "features_reduced.yaml"
 FULL_ONLY_DICTIONARY_FILE = "features_full_only.yaml"
 
 
-def _read_features(filename: str) -> dict:
-    """Returns the ``features`` mapping of one YAML dictionary file."""
+def _read_features(filename: str, key: str = "features") -> dict:
+    """Returns one mapping, ``features`` by default, of one YAML dictionary file."""
 
     with importlib.resources.open_text("prodes.data", filename, encoding="utf-8") as handle:
-        return yaml.safe_load(handle)["features"]
+        return yaml.safe_load(handle)[key]
 
 
 # Each file is read exactly once, at import. The two are kept as separate dicts
@@ -93,6 +102,36 @@ DROPPED_FEATURE_CODES = tuple(_FULL_ONLY_ENTRIES)
 #: ``--full-features`` run, which interleaves the two; read the CSV header if you
 #: need that.
 FULL_FEATURE_CODES = REDUCED_FEATURE_CODES + DROPPED_FEATURE_CODES
+
+# The patch features are part of the reduced set; they are the entries marked
+# per_residue_set, which a run repeats for every residue set it is given.
+_PATCH_ENTRIES = {code: entry for code, entry in _REDUCED_ENTRIES.items() if entry.get("per_residue_set")}
+_RESIDUE_SET_ONLY_ENTRIES = _read_features(REDUCED_DICTIONARY_FILE, "residue_set_only_features")
+
+#: The surface patch features, in the order Prodes writes them. With a residue
+#: set NAME, each is written again as ``<code>_NAME``.
+PATCH_FEATURE_CODES = tuple(_PATCH_ENTRIES)
+
+
+def residue_set_feature_codes(name: str) -> list[str]:
+    """Returns the columns Prodes writes for the residue set NAME, in output order."""
+
+    return [f"{code}_{name}" for code in (*_RESIDUE_SET_ONLY_ENTRIES, *PATCH_FEATURE_CODES)]
+
+
+def _patch_entry(feature_code: str) -> dict | None:
+    """Returns the entry of a patch code, either whole-surface or ``<code>_NAME``, or None.
+
+    Only patch codes take a residue set suffix, so ``Area_CDR`` is not resolved
+    to ``Area``.
+    """
+
+    code, separator, name = feature_code.rpartition("_")
+    # The rule PatchSettings applies to a set name: ASCII letters and digits.
+    if separator and name.isascii() and name.isalnum():
+        return _PATCH_ENTRIES.get(code) or _RESIDUE_SET_ONLY_ENTRIES.get(code)
+
+    return None
 
 
 class FeatureDictionary:
@@ -117,26 +156,38 @@ class FeatureDictionary:
         return f"{type(self).__name__}({len(REDUCED_FEATURE_CODES)} reduced, {len(FULL_FEATURE_CODES)} full feature codes)"
 
     def __contains__(self, feature_code: str) -> bool:
-        return feature_code in self._entries
+        return feature_code in self._entries or _patch_entry(feature_code) is not None
 
     # --- the feature code lists -------------------------------------------------
 
-    def get_feature_codes(self, full: bool = False) -> list[str]:
+    def get_feature_codes(self, full: bool = False, residue_sets=()) -> list[str]:
         """Returns the feature codes, excluding ``ID``.
 
         The reduced set comes back in the order Prodes writes those columns. The
         full set is the reduced codes followed by the full-only ones, which is not
         the column order of a ``--full-features`` run: that interleaves the two.
-        Read the CSV header if you need the exact column order.
+        Read the CSV header if you need the exact column order. The columns of
+        the residue sets come last, in the order Prodes writes them.
 
         Args:
-            full: return the full legacy set instead of the reduced default.
+            full: return the full set instead of the reduced default.
+            residue_sets: the names of the run's residue sets, in the order
+                they were given.
 
         Returns:
             A new list of feature codes.
         """
 
-        return list(FULL_FEATURE_CODES if full else REDUCED_FEATURE_CODES)
+        codes = list(FULL_FEATURE_CODES if full else REDUCED_FEATURE_CODES)
+        for name in residue_sets:
+            codes.extend(residue_set_feature_codes(name))
+
+        return codes
+
+    def get_patch_feature_codes(self) -> list[str]:
+        """Returns the 11 surface patch feature codes, which a run repeats for every residue set."""
+
+        return list(PATCH_FEATURE_CODES)
 
     def get_dropped_feature_codes(self) -> list[str]:
         """Returns the feature codes in the full set that the reduced set leaves out."""
@@ -211,15 +262,24 @@ class FeatureDictionary:
             (``dropped_because``, ``redundant_with``, ``drop_note``).
         """
 
-        try:
+        if feature_code in self._entries:
             return dict(self._entries[feature_code])
-        except KeyError as err:
-            raise KeyError(
-                f"{feature_code!r} is not a Prodes feature code. Use get_feature_codes(full=True) for the {len(FULL_FEATURE_CODES)} valid codes."
-            ) from err
+
+        entry = _patch_entry(feature_code)
+        if entry is not None:
+            return dict(entry)
+
+        raise KeyError(
+            f"{feature_code!r} is not a Prodes feature code. Use get_feature_codes(full=True) for the {len(FULL_FEATURE_CODES)} "
+            "valid codes; a patch code may also carry a residue set suffix, such as SurfMhpPatchArea_CDR."
+        )
 
     def get_dictionary(self) -> dict:
-        """Returns every entry, keyed by feature code.
+        """Returns every entry of the reduced and full sets, keyed by feature code.
+
+        The patch features are included under their plain codes; the residue
+        set columns, such as ``SurfMhpPatchArea_CDR``, are not, but get_entry
+        looks them up.
 
         Returns:
             A new dict of new dicts, safe to mutate.
