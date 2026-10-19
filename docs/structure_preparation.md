@@ -47,7 +47,7 @@ Only the **geometry**. Prodes reads `ATOM` records, filters out hydrogens, and r
 
 So the hydrogens PDB2PQR adds, the protonation states it assigns and the partial charges it writes are all discarded. That is deliberate: it is what lets you run Prodes at several pH values against one prepared structure. What you gain from the preparation step is that the atoms are there and in sensible positions.
 
-A structure without hydrogens is therefore a valid input. Stripping all 1,625 hydrogens from an ABodyBuilder3 Fv model, with the same pKa file, left every one of the 77 feature columns of a `--patches` run unchanged. What does change the values is a missing heavy atom, and on a predicted structure that is almost always `OXT`; see the next section.
+A structure without hydrogens is therefore a valid input. Stripping all 1,625 hydrogens from an ABodyBuilder3 Fv model, with the same pKa file, left every one of the 77 feature columns of a run with a CDR residue set unchanged. What does change the values is a missing heavy atom, and on a predicted structure that is almost always `OXT`; see the next section.
 
 ## What happens to a predicted structure: the terminal oxygen
 

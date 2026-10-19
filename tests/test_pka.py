@@ -11,9 +11,9 @@ It is not a corner of the package that can be left to look after itself. On
 1GDW a real PROPKA prediction moves 19 of the 54 reduced features, formal
 charge included, so a refactor that quietly stopped applying the values would
 change more than a third of the output while every other test still passed.
-Downstream code already depends on it: biochai runs PROPKA and imports
-convert_propka to read the result, so this is a public API with an outside
-caller.
+Downstream code already depends on it: callers typically run PROPKA and
+import convert_propka to read the result, so this is a public API with outside
+callers.
 
 The chain has four links and one test each below::
 

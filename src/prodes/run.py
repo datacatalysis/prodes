@@ -70,30 +70,27 @@ def parse_arguments():
     )
     parser.add_argument("--hydro", help="Abbreviation of the hydrophobicity scale to be used", type=str, default="mj_scaled")
     parser.add_argument(
-        "--patches",
-        action="store_true",
-        help="Also report contiguous hydrophobic, positive and negative surface patches; see docs/surface_patches.md",
-    )
-    parser.add_argument(
         "--residue-set",
         action="append",
         default=[],
         metavar="NAME=FILE",
-        help="With --patches, also report every patch feature restricted to the residues listed in FILE, one label "
-        "such as H100A per line, under columns ending in _NAME. Repeatable",
+        help="Also report every surface patch feature restricted to the residues listed in FILE, one label "
+        "such as H100A per line, under columns ending in _NAME. Repeatable; see docs/surface_patches.md",
     )
-    parser.add_argument("--patch-radius", type=float, default=None, help=f"Neighbourhood radius in A for the patch average (default: {DEFAULT_PATCH_RADIUS})")
-    parser.add_argument("--patch-min-area", type=float, default=None, help=f"Smallest patch kept, in A^2 (default: {DEFAULT_PATCH_MIN_AREA})")
+    parser.add_argument(
+        "--patch-radius", type=float, default=DEFAULT_PATCH_RADIUS, help=f"Neighbourhood radius in A for the patch average (default: {DEFAULT_PATCH_RADIUS})"
+    )
+    parser.add_argument("--patch-min-area", type=float, default=DEFAULT_PATCH_MIN_AREA, help=f"Smallest patch kept, in A^2 (default: {DEFAULT_PATCH_MIN_AREA})")
     parser.add_argument(
         "--patch-hydrophobic-threshold",
         type=float,
         default=None,
-        help="Neighbourhood-averaged hydrophobicity above which a point is hydrophobic (default: 0, refused for a scale with no negative values)",
+        help="Neighbourhood-averaged hydrophobicity above which a point is hydrophobic (default: 0; required with a scale that has no negative values, such as mj)",
     )
     parser.add_argument(
         "--patch-ep-threshold",
         type=float,
-        default=None,
+        default=DEFAULT_EP_THRESHOLD,
         help=f"Neighbourhood-averaged potential in volts beyond which a point is positive or negative (default: {DEFAULT_EP_THRESHOLD})",
     )
     parser.add_argument(
@@ -149,26 +146,13 @@ def parse_arguments():
     if not math.isfinite(ionic_strength_molar) or ionic_strength_molar < 0:
         raise ValueError(f"--ionic-strength must be a finite number and not negative, got {ionic_strength_molar}")
 
-    patch_options = {
-        "--patch-radius": arg.patch_radius,
-        "--patch-min-area": arg.patch_min_area,
-        "--patch-hydrophobic-threshold": arg.patch_hydrophobic_threshold,
-        "--patch-ep-threshold": arg.patch_ep_threshold,
-    }
-    patches = None
-    if arg.patches:
-        patches = PatchSettings(
-            radius=DEFAULT_PATCH_RADIUS if arg.patch_radius is None else arg.patch_radius,
-            min_area=DEFAULT_PATCH_MIN_AREA if arg.patch_min_area is None else arg.patch_min_area,
-            hydrophobic_threshold=arg.patch_hydrophobic_threshold,
-            ep_threshold=DEFAULT_EP_THRESHOLD if arg.patch_ep_threshold is None else arg.patch_ep_threshold,
-            residue_sets=read_residue_sets(arg.residue_set),
-        )
-    else:
-        # Without --patches these would be silently ignored.
-        given = [option for option, value in patch_options.items() if value is not None] + (["--residue-set"] if arg.residue_set else [])
-        if given:
-            raise ValueError(f"{', '.join(given)} only apply to the patch features, so they need --patches")
+    patches = PatchSettings(
+        radius=arg.patch_radius,
+        min_area=arg.patch_min_area,
+        hydrophobic_threshold=arg.patch_hydrophobic_threshold,
+        ep_threshold=arg.patch_ep_threshold,
+        residue_sets=read_residue_sets(arg.residue_set),
+    )
 
     return pdb_file, out_file, pkas_file, ph, r_probe, hydro_scale, full_features, mem_limit_mb, ionic_strength_molar, patches
 
@@ -592,10 +576,10 @@ def calculate(
             run, divided among the workers. If None, falls back to the
             PRODES_MEM_LIMIT_MB env var (default 2048). Pass explicitly when calling
             as a library to avoid relying on environment variables.
-        patches: a prodes.calculations.patches.PatchSettings to also report
-            contiguous surface patches, optionally restricted to named residue
-            sets; None, the default, leaves them out and the feature table is
-            the same as without this option.
+        patches: a prodes.calculations.patches.PatchSettings for the surface
+            patch features, such as residue sets to restrict them to. None, the
+            default, means PatchSettings(): the default settings and no
+            residue sets. The patch features are part of every run.
 
     Thread safety
         Safe to run in several processes, one structure each, which is how the
@@ -607,11 +591,15 @@ def calculate(
 
     validate_settings(mem_limit_mb)
 
-    structure = prepare_structure(pdb_file, pkas_file)
+    if patches is None:
+        patches = PatchSettings()
+    # Checked before the structure is read, since the threshold depends only on
+    # the scale; the residue labels are checked as soon as it has been read.
     # Both checks are cheap, and the surface phase that follows is not.
-    if patches is not None:
-        patches.resolved_hydrophobic_threshold(hydro_scale)
-        check_residue_sets(patches.residue_sets, [residue.label for residue in structure.residues])
+    patches.resolved_hydrophobic_threshold(hydro_scale)
+
+    structure = prepare_structure(pdb_file, pkas_file)
+    check_residue_sets(patches.residue_sets, [residue.label for residue in structure.residues])
     # Reported before the slow phases, so that a structure whose disulfides were
     # not found can be spotted without waiting for the run to finish.
     print(f"{structure.name}: {len(structure.disulfides)} disulfide bonds detected")
@@ -634,20 +622,18 @@ def calculate(
 
     # Computed from the snapshot above, so the average charge phase overwriting
     # the potential on the points cannot reach it, and appended after the shell
-    # features so that the default columns keep their positions.
-    patch_features: dict = {}
-    if patches is not None:
-        patch_features, patch_columns = calculate_patch_features(
-            coords,
-            areas,
-            residues,
-            lipo,
-            ep,
-            patches,
-            hydro_scale,
-            [residue.label for residue in structure.residues],
-        )
-        point_columns.update(patch_columns)
+    # features, which is their place in features_reduced.yaml.
+    patch_features, patch_columns = calculate_patch_features(
+        coords,
+        areas,
+        residues,
+        lipo,
+        ep,
+        patches,
+        hydro_scale,
+        [residue.label for residue in structure.residues],
+    )
+    point_columns.update(patch_columns)
 
     if full_features:
         features = calculate_average_chargesurface_grid_features(structure, surface_points, ph, features, ionic_strength_molar=ionic_strength_molar)
@@ -661,9 +647,8 @@ def calculate(
         "hydro_scale": hydro_scale,
         "full_features": full_features,
         "ionic_strength_molar": ionic_strength_molar,
+        "patches": patches.record(hydro_scale),
     }
-    if patches is not None:
-        settings["patches"] = patches.record(hydro_scale)
     metadata = run_metadata(
         pdb_file,
         settings,

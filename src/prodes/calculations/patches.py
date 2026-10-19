@@ -50,7 +50,7 @@ RESIDUE_SET_NAME = re.compile(r"^[A-Za-z0-9]+$")
 
 @dataclass(frozen=True)
 class PatchSettings:
-    """The settings of the patch step. Passing one to calculate switches the step on.
+    """The settings of the patch step, which runs on every structure. calculate uses PatchSettings() when given none.
 
     Attributes:
         radius: neighbourhood radius in angstrom for the average.
@@ -107,7 +107,8 @@ class PatchSettings:
         if min(hydrophobic_scale(hydro_scale).values()) >= 0:
             raise ValueError(
                 f"the hydrophobicity scale {hydro_scale} has no negative values, so the default patch threshold of "
-                f"{DEFAULT_HYDROPHOBIC_THRESHOLD} would mark every point hydrophobic; pass a hydrophobic threshold explicitly"
+                f"{DEFAULT_HYDROPHOBIC_THRESHOLD} would mark every point hydrophobic; pass one explicitly, with "
+                "--patch-hydrophobic-threshold or PatchSettings(hydrophobic_threshold=...)"
             )
 
         return DEFAULT_HYDROPHOBIC_THRESHOLD
@@ -337,7 +338,7 @@ def calculate_patch_features(coords, areas, residues, lipo, ep, settings, hydro_
         "SurfEpNeg": kept_patches(label_patches(indices, local_ep < -settings.ep_threshold), areas, settings.min_area),
     }
 
-    # Column order is the order of src/prodes/data/features_patches.yaml, which
+    # Column order is the order of src/prodes/data/features_reduced.yaml, which
     # documents each one; tests/test_patches.py checks the two agree.
     def block(in_set):
         return {

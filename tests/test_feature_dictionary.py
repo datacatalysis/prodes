@@ -23,6 +23,7 @@ from prodes.feature_dictionary import (
     FULL_FEATURE_CODES,
     FULL_ONLY_DICTIONARY_FILE,
     ID_COLUMN,
+    PATCH_FEATURE_CODES,
     REDUCED_DICTIONARY_FILE,
     REDUCED_FEATURE_CODES,
     FeatureDictionary,
@@ -39,7 +40,7 @@ def test_get_the_reduced_feature_codes():
     fd = FeatureDictionary()
     codes = fd.get_feature_codes()
 
-    assert len(codes) == 54
+    assert len(codes) == 65
     assert codes[0] == "Molecular weight"
     assert "SurfEpMeanFormal" in codes
     assert "SurfEpMeanAverage" not in codes
@@ -50,7 +51,7 @@ def test_get_the_full_feature_codes():
     fd = FeatureDictionary()
     codes = fd.get_feature_codes(full=True)
 
-    assert len(codes) == 105
+    assert len(codes) == 116
     assert "SurfEpMeanAverage" in codes
 
 
@@ -91,7 +92,7 @@ def test_label_a_whole_dataframe_of_results():
     fd = FeatureDictionary()
     labels = {code: fd.get_plot_name(code) for code in fd.get_feature_codes()}
 
-    assert len(labels) == 54
+    assert len(labels) == 65
     assert all(labels.values())
 
 
@@ -158,9 +159,15 @@ def test_full_codes_match_the_original_reference_output():
     reference = {column for column in pd.read_csv(ORIG_OUTPUT).columns if column != ID_COLUMN}
     ours = set(FULL_FEATURE_CODES)
 
-    added = sorted(ours - reference)
+    # The 11 surface patch features are the one deliberate addition. They were
+    # put in the default set in version 10.0, after a model of antibody HIC
+    # retention improved with them on a held-out panel; see
+    # docs/surface_patches.md. Their redundancy against the others has not been
+    # analysed the way docs/redundant_feature_analysis.md analysed the 105.
+    added = sorted(ours - reference - set(PATCH_FEATURE_CODES))
     missing = sorted(reference - ours)
 
+    assert len(PATCH_FEATURE_CODES) == 11
     assert not added, f"in the YAML dictionaries but not in the original Prodes output: {added}. If this is a genuinely new feature, see this test's docstring."
     assert (
         not missing
@@ -379,11 +386,12 @@ def test_original_explanation_is_none_for_features_the_paper_omits():
     assert fd.get_original_explanation("SurfNegMhpMedian") is None
 
 
-def test_the_paper_documents_all_but_two_features():
+def test_the_paper_documents_every_original_feature_but_two():
+    """The patch features postdate the paper, so none of them has its wording."""
     fd = FeatureDictionary()
     undocumented = [code for code in FULL_FEATURE_CODES if fd.get_original_explanation(code) is None]
 
-    assert undocumented == ["SurfPosMhpMedian", "SurfNegMhpMedian"]
+    assert set(undocumented) == {"SurfPosMhpMedian", "SurfNegMhpMedian", *PATCH_FEATURE_CODES}
 
 
 def test_our_description_and_the_paper_agree_on_the_statistic():

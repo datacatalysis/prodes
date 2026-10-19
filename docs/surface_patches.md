@@ -1,18 +1,20 @@
 # Surface patches
 
-The default Prodes features summarise the surface by the sign of each point's value: every hydrophobic point on the protein is pooled, whether the points form one region or twenty scattered ones. The patch step adds the spatial grouping. It reports how much of the surface is covered by contiguous hydrophobic, positive and negative regions, how large the largest one is, and the same quantities restricted to a named set of residues, such as the CDRs of an antibody.
+Most Prodes features summarise the surface by the sign of each point's value: every hydrophobic point on the protein is pooled, whether the points form one region or twenty scattered ones. The patch step adds the spatial grouping. It reports how much of the surface is covered by contiguous hydrophobic, positive and negative regions, how large the largest one is, and the same quantities restricted to a named set of residues, such as the CDRs of an antibody.
 
-The step is off by default. Switching it on appends columns to the feature table and leaves every default column unchanged.
+The patch step runs on every structure. Its 11 columns are the last of the 65 default features, and the residue-set columns, when a run is given residue sets, come after them. It adds about 1 s to a run of 57,000 surface points.
+
+Added to a random-forest model of antibody hydrophobic interaction chromatography (HIC) retention built on sequence features, the patch columns raised the mean per-fold Spearman R on the five published folds of the GDPa1 panel (236 antibodies) from 0.533 to 0.573 with ABodyBuilder3 Fv models and from 0.529 to 0.589 with Boltz-2 models of the whole antibody, improving every fold, and raised it on the held-out GDPa3 panel (79 antibodies) from 0.527 to 0.620. Added to models of anion and cation exchange retention, they changed the Spearman R by less than 0.01.
 
 ## Running it
 
 Command line:
 
 ```bash
-prodes Fv.pdb Fv.zip --patches --residue-set CDR=cdr_residues.txt --residue-set Fv=fv_residues.txt
+prodes Fv.pdb Fv.zip --residue-set CDR=cdr_residues.txt --residue-set Fv=fv_residues.txt
 ```
 
-Python:
+Python, where `patches` is optional and only needed to name residue sets or change a setting:
 
 ```python
 from prodes.run import calculate
@@ -48,7 +50,7 @@ Finding patches on the whole surface and then restricting them means a patch tha
 | `ep_threshold` | `--patch-ep-threshold` | 0.5 V | Applied symmetrically to positive and negative patches. |
 | `residue_sets` | `--residue-set NAME=FILE` | none | Repeatable. `NAME` is letters and digits only. |
 
-The `--patch-*` and `--residue-set` options are refused without `--patches`, since they would otherwise do nothing.
+With `--hydro mj`, whose values are all positive, the default hydrophobic threshold of 0 would mark every point hydrophobic, so a run with that scale is refused unless `--patch-hydrophobic-threshold` is given.
 
 The hydrophobicity scale is the run's `--hydro` setting. The thresholds are in the units of the local value, so a threshold chosen for one scale does not carry over to another.
 
@@ -82,9 +84,9 @@ For each residue set `NAME` the run then writes `SurfArea_NAME`, the surface are
 
 `SurfMhpLocalMax` and `SurfMhpLocalPosSum` need no threshold and no minimum area, so they are not affected by either choice. They are similar in spirit to spatial aggregation propensity (Chennamsetty et al., PNAS 2009), which also averages a hydrophobicity scale over a neighbourhood and sums the positive part, although that method works per atom and weights each residue by its exposed side-chain fraction. `SurfMhpLocalPosSum` is in square angstrom times the units of the hydrophobicity scale, so its value depends on the scale.
 
-Every code is documented in `src/prodes/data/features_patches.yaml`, and `FeatureDictionary` looks up a code with or without a residue set suffix.
+Every code is documented in `src/prodes/data/features_reduced.yaml`, where the patch features are marked `per_residue_set`. `FeatureDictionary` looks up a code with or without a residue set suffix, and `get_feature_codes(residue_sets=[...])` lists the columns of a run with residue sets.
 
-The point table, `*_surface_points.csv`, always carries `area_A2` and `residue` for each point. With the patch step it also carries `local_mhp`, `local_ep_volts` and `mhp_patch_id`, the hydrophobic patch the point belongs to (-1 for none), so a patch can be traced back to its residues.
+The point table, `*_surface_points.csv`, carries `area_A2`, `residue`, `local_mhp`, `local_ep_volts` and `mhp_patch_id`, the hydrophobic patch the point belongs to (-1 for none), for each point, so a patch can be traced back to its residues.
 
 ## Limitations
 

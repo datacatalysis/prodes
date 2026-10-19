@@ -76,10 +76,10 @@ WHAT IS IN HERE
   {name}_features.csv              the calculated features, one row
   {name}_surface_points.csv        every surface point: x, y, z, potential,
                                    hydrophobicity, the area it stands for, and
-                                   the residue owning most of that area; with
-                                   --patches also the neighbourhood averages
-                                   and the hydrophobic patch it belongs to
-                                   (-1 for none)
+                                   the residue owning most of that area, the
+                                   neighbourhood averages of hydrophobicity and
+                                   potential, and the hydrophobic patch it
+                                   belongs to (-1 for none)
   {name}_ep.pml                    PyMOL, coloured by electrostatic potential
   {name}_hydrophobicity.pml        PyMOL, coloured by hydrophobicity
   {name}_ep.cxc                    ChimeraX, electrostatic potential

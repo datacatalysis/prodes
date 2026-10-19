@@ -37,9 +37,9 @@ def run_prodes(
         mem_limit_mb: memory budget in MB for the intermediate NumPy arrays of this
             run, divided among the workers. Pass explicitly in worker processes
             rather than relying on the PRODES_MEM_LIMIT_MB environment variable.
-        patches: a prodes.calculations.patches.PatchSettings to also report
-            contiguous surface patches, optionally over named residue sets.
-            None leaves them out.
+        patches: a prodes.calculations.patches.PatchSettings for the surface
+            patch features, such as residue sets to restrict them to. None means
+            the default settings and no residue sets.
     """
 
     calculate(

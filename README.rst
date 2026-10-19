@@ -1,7 +1,7 @@
 Prodes: Protein Descriptors
 ============================
 
-**Prodes turns a 3D protein structure into numbers describing the surface properties.** You give it a PDB file, and it gives you a row in a CSV file with 54 columns describing the surface of that protein: how much of it is charged, how much of it is hydrophobic, how those properties are spread out across the surface, and how the picture changes with pH.
+**Prodes turns a 3D protein structure into numbers describing the surface properties.** You give it a PDB file, and it gives you a row in a CSV file with 65 columns describing the surface of that protein: how much of it is charged, how much of it is hydrophobic, how those properties are spread out across the surface, how large the contiguous hydrophobic and charged patches are, and how the picture changes with pH.
 
 Those columns are designed to be used directly as the input features of a machine learning or QSPR model. If you have measured something about a set of proteins (a retention time, an aggregation onset, a viscosity, a titre) and you want to predict it for proteins you have not measured, Prodes gives you the X side of that problem from structure alone.
 
@@ -54,7 +54,7 @@ The fourth line adds `PROPKA <https://github.com/jensengroup/propka>`_, which is
 PDB2PQR, in its own environment
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-You should also use `PDB2PQR <https://github.com/Electrostatics/pdb2pqr>`_, which repairs the structure before anything measures it. On one antibody structure, rebuilding two unmodelled lysine side chains moved 31 of the 54 features and shifted the isoelectric point by more than a pH unit. See `Preparing your structure`_.
+You should also use `PDB2PQR <https://github.com/Electrostatics/pdb2pqr>`_, which repairs the structure before anything measures it. On one antibody structure, rebuilding two unmodelled lysine side chains moved 31 of the 54 non-patch default features and shifted the isoelectric point by more than a pH unit. See `Preparing your structure`_.
 
 **Put it in an environment of its own:**
 
@@ -126,7 +126,7 @@ Run these four commands on your structure. PDB2PQR lives in its own environment,
     python -m prodes.io.pka_converter 1GDW.pka propka -o 1GDW_pka.json  # convert them for Prodes
     python -m prodes prepared/1GDW.pdb 1GDW.zip --ph 7.4 --pka 1GDW_pka.json  # calculate the features
 
-That writes ``1GDW.zip``, a bundle holding the 54 features, the surface points they were calculated from, and ready-to-open viewer scripts. On a small protein the whole thing takes seconds.
+That writes ``1GDW.zip``, a bundle holding the 65 features, the surface points they were calculated from, and ready-to-open viewer scripts. On a small protein the whole thing takes seconds.
 
 Two things about that sequence are worth noticing, and both are explained under `Preparing your structure`_:
 
@@ -148,7 +148,8 @@ The ones you are most likely to want:
 * ``--ph`` — the pH at which to compute protonation states (default 7). Charge features change substantially with this, so set it to the pH of your buffer.
 * ``--pka`` — supply per-residue pKa values from PROPKA or a similar tool. Recommended, as above; see `pKa values and protonation states`_.
 * ``--probe`` — the radius of the solvent probe used for the surface calculation (default 1.4 Å, i.e. water).
-* ``--full-features`` — write the original 105-feature set instead of the reduced 54. See `The reduced feature set`_.
+* ``--full-features`` — write the original 105 features plus the 11 patch features, 116 in all, instead of the reduced 65. See `The reduced feature set`_.
+* ``--residue-set NAME=FILE`` — also report every surface patch feature restricted to the residues listed in the file, such as the CDRs of an antibody. See `Surface patches`_.
 * ``--n-workers``, ``--chunksize``, ``--mem-limit`` — CPU and memory tuning. You can ignore all three; the defaults are sensible. See `Speed`_.
 
 Viewing the surface
@@ -227,7 +228,7 @@ Unpacked, the bundle holds:
 .. code-block:: text
 
     1GDW/
-      1GDW_features.csv              the 54 features, one row, first column ID
+      1GDW_features.csv              the 65 features, one row, first column ID
       1GDW_surface_points.csv        every surface point: x, y, z, potential, hydrophobicity,
                                      area, and the residue owning it
       1GDW_ep.pml                    PyMOL, coloured by electrostatic potential
@@ -262,7 +263,7 @@ To read the features back:
 What the features actually are
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Prodes builds a dotted surface over the protein (a Shrake-Rupley solvent-accessible surface), assigns each surface point an electrostatic potential and a hydrophobicity, and then summarises those distributions. The 54 default columns are, broadly:
+Prodes builds a dotted surface over the protein (a Shrake-Rupley solvent-accessible surface), assigns each surface point an electrostatic potential and a hydrophobicity, and then summarises those distributions. The 65 default columns are, broadly:
 
 * **Whole-molecule properties** — molecular weight, total surface area, formal charge at your chosen pH, isoelectric point, dipole moment, and shape descriptors.
 * **Surface electrostatic potential** — the maximum, minimum, mean and standard deviation of the potential over the whole surface, then the same statistics computed separately over just the positive and just the negative regions, plus a count of how many surface points are positive. A protein with a strongly positive area of surface and a strongly negative one can have a near-zero net charge but very distinctive values here, which is exactly the kind of thing a net-charge calculation misses. Note that these are statistics over all positive or all negative surface points; grouping them into individual patches is the optional patch step (see `Surface patches`_).
@@ -272,21 +273,20 @@ Prodes builds a dotted surface over the protein (a Shrake-Rupley solvent-accessi
 
 Every feature has a plot label, a one-line description, a full explanation of how it is calculated, its unit, and the wording used for it in the original publication. These live in two human-readable YAML files, which are also the single source of truth for which features Prodes writes, so you can read the whole list without running anything:
 
-* `features_reduced.yaml <src/prodes/data/features_reduced.yaml>`_ — the **54 features calculated by default**
+* `features_reduced.yaml <src/prodes/data/features_reduced.yaml>`_ — the **65 features calculated by default**, the last 11 of them the surface patch features
 * `features_full_only.yaml <src/prodes/data/features_full_only.yaml>`_ — the **other 51**, written only under ``--full-features``, each with the reason it is not in the default set
 
-A third file, `features_patches.yaml <src/prodes/data/features_patches.yaml>`_, documents the surface patch features, which are written only with ``--patches``.
 
 Surface patches
 ~~~~~~~~~~~~~~~
 
-``--patches`` adds a block of features that group the surface into contiguous regions. Each point's hydrophobicity and potential are averaged over a 5 Å neighbourhood, points above a threshold that touch are joined into patches, and the run reports the summed area, the largest area and the number of hydrophobic, positive and negative patches, plus the highest and the summed positive local hydrophobicity. ``--residue-set NAME=FILE`` reports every one of them again restricted to the residues listed in the file, such as the CDRs of an antibody, under columns ending in ``_NAME``:
+The last 11 default columns group the surface into contiguous regions. Each point's hydrophobicity and potential are averaged over a 5 Å neighbourhood, points above a threshold that touch are joined into patches, and the run reports the summed area, the largest area and the number of hydrophobic, positive and negative patches, plus the highest and the summed positive local hydrophobicity. ``--residue-set NAME=FILE`` reports every one of them again restricted to the residues listed in the file, such as the CDRs of an antibody, under columns ending in ``_NAME``:
 
 .. code-block:: bash
 
-    prodes Fv.pdb Fv.zip --patches --residue-set CDR=cdr_residues.txt
+    prodes Fv.pdb Fv.zip --residue-set CDR=cdr_residues.txt
 
-The default 54 columns are unchanged by the flag; the patch columns are appended after them. The thresholds and the minimum patch area are settings; their defaults were checked against antibody HIC data and kept, because settings tuned on one antibody panel did worse on a held-out one. Method, settings, columns and limitations: `surface patches <docs/surface_patches.md>`_.
+The patch columns come after all the others, and the residue-set columns after those. Added to a random-forest model of antibody hydrophobic interaction chromatography retention built on sequence features, the patch columns raised its Spearman R on a held-out panel from 0.527 to 0.620. The thresholds and the minimum patch area are settings; their defaults were checked against antibody HIC data and kept, because settings tuned on one antibody panel did worse on a held-out one. Method, settings, columns and limitations: `surface patches <docs/surface_patches.md>`_.
 
 Looking features up from Python
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -308,7 +308,7 @@ The same information is available programmatically, which is what you want when 
     fd.get_reason_dropped("SurfEpMeanAverage")  # why it is not in the default set
     fd.get_reason_dropped("SurfEpMeanFormal")   # None: this one is kept
 
-The lookups are one-directional by design: the feature code is the key, and there is no route back from a label or description to a code. ``fd.get_entry(code)`` returns everything known about one feature and ``fd.get_dictionary()`` returns all 105 entries at once.
+The lookups are one-directional by design: the feature code is the key, and there is no route back from a label or description to a code. ``fd.get_entry(code)`` returns everything known about one feature and ``fd.get_dictionary()`` returns all 116 entries at once.
 
 Getting the feature codes
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -321,8 +321,8 @@ Both lists come from the YAML dictionaries shipped in ``prodes/data``, so a pipe
 
     fd = FeatureDictionary()
 
-    fd.get_feature_codes()             # the 54 written by default
-    fd.get_feature_codes(full=True)    # all 105 legacy columns
+    fd.get_feature_codes()             # the 65 written by default
+    fd.get_feature_codes(full=True)    # the 116 written with --full-features
     fd.get_dropped_feature_codes()     # the 51 the default leaves out
 
 Each returns a fresh ``list`` of feature codes, in the order Prodes writes the columns. ``ID`` is a row label rather than a feature and is in neither list; it is available as ``prodes.feature_dictionary.ID_COLUMN``. The underlying tuples are exposed as ``FULL_FEATURE_CODES``, ``REDUCED_FEATURE_CODES`` and ``DROPPED_FEATURE_CODES`` if you would rather not construct the class.
@@ -418,9 +418,9 @@ Using ``validate="one_to_one"`` is worth the extra keystrokes: it raises if a st
 
 PLS is a reasonable first choice for this kind of data because the features are correlated with one another by construction, and PLS handles that gracefully. Random forests and gradient boosting also work well and need no scaling.
 
-**A note on sample size.** 54 features is a lot if you have measured 20 proteins. With fewer observations than features, almost any model will fit the training data perfectly and predict nothing. The reduced feature set exists precisely to push that ratio in your favour; do not reach for ``--full-features`` to get more columns unless you have the observations to support them (see `The reduced feature set`_). Always report a score against a holdout blind test set, never a training-set score.
+**A note on sample size.** 65 features is a lot if you have measured 20 proteins. With fewer observations than features, almost any model will fit the training data perfectly and predict nothing. The reduced feature set exists precisely to push that ratio in your favour; do not reach for ``--full-features`` to get more columns unless you have the observations to support them (see `The reduced feature set`_). Always report a score against a holdout blind test set, never a training-set score.
 
-**If you select features, select them inside the cross-validation loop.** Screening all 54 columns for the ones that correlate with your measurement, and then cross-validating a model built from the survivors, reports a score that is not out of sample: every held-out protein helped choose the features. On small datasets this reliably manufactures impressive numbers from nothing. ``sklearn.feature_selection.SelectKBest`` inside a ``Pipeline`` does it correctly, because the selection is refitted on each training fold.
+**If you select features, select them inside the cross-validation loop.** Screening all 65 columns for the ones that correlate with your measurement, and then cross-validating a model built from the survivors, reports a score that is not out of sample: every held-out protein helped choose the features. On small datasets this reliably manufactures impressive numbers from nothing. ``sklearn.feature_selection.SelectKBest`` inside a ``Pipeline`` does it correctly, because the selection is refitted on each training fold.
 
 Ionic strength and screening
 -----------------------------
@@ -454,7 +454,7 @@ The values are not quite identical to the released 4.x numbers, for a separate r
 
 **What this is and is not.** The screening length is the Debye length in water, where the relative permittivity is about 78.5. Prodes evaluates its sum at a uniform relative permittivity of 4, where the self consistent value would be about 1.8 Angstrom. Using the water value inside a kernel with a protein dielectric is an empirical correction that mimics screening. It is used because it is what was measured to agree best with a Poisson-Boltzmann reference, not because the two are consistent, and the potential is still not comparable to an APBS calculation despite both being reported in volts.
 
-**Scope.** Screening applies to the surface features, the ``SurfEp`` family: 9 of the 54 default features, and 38 of the 105 with ``--full-features``, the extra 19 being the ``SurfEp*Average`` columns computed from partial rather than formal charges. The ``ShellEp`` features, 9 by default and 19 with the full set, are unchanged, and that is a measured decision rather than an omission: they are computed by a different route which divides the path at the molecular surface and weights the solvent leg with a permittivity of 80 against 4 for the protein, so a distant charge is already damped about twentyfold and the offset that affected the surface never built up. Checked against an APBS equivalent, the unscreened shell agrees at a Spearman of 0.877, and adding screening moved that to 0.855. See ``docs/screening_validation.md``.
+**Scope.** Screening applies to the surface features, the ``SurfEp`` family: 9 of the 65 default features, and 38 of the 116 with ``--full-features``, the extra 19 being the ``SurfEp*Average`` columns computed from partial rather than formal charges. The ``ShellEp`` features, 9 by default and 19 with the full set, are unchanged, and that is a measured decision rather than an omission: they are computed by a different route which divides the path at the molecular surface and weights the solvent leg with a permittivity of 80 against 4 for the protein, so a distant charge is already damped about twentyfold and the offset that affected the surface never built up. Checked against an APBS equivalent, the unscreened shell agrees at a Spearman of 0.877, and adding screening moved that to 0.855. See ``docs/screening_validation.md``.
 
 Preparing your structure
 -------------------------
@@ -496,7 +496,7 @@ Mean surface electrostatic potential                    -0.013                 +
 Positive surface points                                 12,976                 13,684
 =====================================  =======================  =====================
 
-**31 of the 54 default features move.** The net charge is wrong by 2, the isoelectric point is wrong by 1.14 units, and the mean surface potential has the wrong sign. For choosing between an anion and a cation exchanger at a given buffer pH, a pI of 6.46 and a pI of 7.61 are different recommendations.
+**31 of the 54 non-patch default features move.** The net charge is wrong by 2, the isoelectric point is wrong by 1.14 units, and the mean surface potential has the wrong sign. For choosing between an anion and a cation exchanger at a given buffer pH, a pI of 6.46 and a pI of 7.61 are different recommendations.
 
 This is not universal. Many deposited structures are complete. It is a property of resolution and of surface disorder, and the residues most often left unmodelled are the long charged ones, which are exactly the residues that carry the charge.
 
@@ -548,7 +548,7 @@ Left to itself, Prodes uses **one textbook pKa per residue type**: every asparta
 
 **PROPKA predicts a pKa for each individual residue from its structural environment**, and Prodes reads those predictions. This is the recommended default. It is a small, free, MIT-licensed program from the Jensen group, it installs on Windows, macOS and Linux, and on a normal protein it finishes in seconds. There is very little reason not to use it.
 
-How much does it matter? On 1GDW, feeding in PROPKA values changes **19 of the 54 features**, moving the isoelectric point from 10.34 to 10.57 and the formal charge from +7 to +8. In a larger test across 819 AlphaFold structures it changed 22 features, the most affected being ``SurfEpMinFormal`` at only R² = 0.82 between the two runs (`full report <docs/identification_of_propka_dependent_features.md>`_).
+How much does it matter? On 1GDW, feeding in PROPKA values changes **19 of the 54 non-patch default features**, moving the isoelectric point from 10.34 to 10.57 and the formal charge from +7 to +8. In a larger test across 819 AlphaFold structures it changed 22 features, the most affected being ``SurfEpMinFormal`` at only R² = 0.82 between the two runs (`full report <docs/identification_of_propka_dependent_features.md>`_).
 
 .. important::
 
@@ -647,7 +647,7 @@ The command line and the Python interface do the same work. To reproduce a comma
     import prodes
     prodes.run_prodes("./tests/data/1GDW.pdb.zip", "example.zip")
 
-The full signature is ``run_prodes(pdb_file, out_file, pkas_file=None, ph=7, r_probe=1.4, hydro_scale="mj_scaled", full_features=False, mem_limit_mb=None, ionic_strength_molar=0.15, patches=None)``, where ``patches`` takes a ``prodes.calculations.patches.PatchSettings``; see `Surface patches`_.
+The full signature is ``run_prodes(pdb_file, out_file, pkas_file=None, ph=7, r_probe=1.4, hydro_scale="mj_scaled", full_features=False, mem_limit_mb=None, ionic_strength_molar=0.15, patches=None)``, where ``patches`` takes a ``prodes.calculations.patches.PatchSettings`` to change the patch settings or name residue sets, and None means the defaults; see `Surface patches`_.
 
 The lower-level pieces are importable too, if you want a single property rather than the whole feature set. Calculating just the surface area, for example:
 
@@ -672,7 +672,7 @@ The lower-level pieces are importable too, if you want a single property rather 
 The reduced feature set
 ------------------------
 
-The 105 numeric features in the original Prodes output were highly redundant. They have been reduced to **54 features** to lower the risk of overfitting and to cut calculation time. Nothing new is calculated and no kept feature changes value: the default output is a strict column subset of the original, in the original column order.
+The 105 numeric features in the original Prodes output were highly redundant. They have been reduced to **54 features** to lower the risk of overfitting and to cut calculation time, and the default output adds the 11 surface patch features after them, **65** in all. No kept feature changes value: apart from the patch columns at the end, the default output is a strict column subset of the original, in the original column order. The patch features were not part of the redundancy analysis.
 
 To calculate the full set anyway, use the ``--full-features`` flag, set ``PRODES_FULL_FEATURES=true`` in the environment, or pass ``full_features=True`` to ``prodes.run.calculate()``.
 
@@ -817,9 +817,9 @@ These two come up constantly in this literature, but neither competes with Prode
 Where Prodes sits
 ~~~~~~~~~~~~~~~~~~
 
-**By default, Prodes does not identify discrete patches.** It builds a dotted surface, gives every point an electrostatic potential and a hydrophobicity, and then summarises those values over the whole surface and over the positive and negative subsets. Those subsets are defined by the sign of the value at a point, not by spatial contiguity: a positive-subset statistic pools every positive surface point on the protein, whether they form one large region or twenty scattered ones.
+**Prodes identifies discrete patches, in its last 11 default features.** It builds a dotted surface and gives every point an electrostatic potential and a hydrophobicity. Most of its features then summarise those values over the whole surface and over the positive and negative subsets, which are defined by the sign of the value at a point, not by spatial contiguity: a positive-subset statistic pools every positive surface point on the protein, whether they form one large region or twenty scattered ones.
 
-With ``--patches`` it does: neighbourhood-averaged values are thresholded and touching points joined into patches, whose areas are reported over the whole surface and over any residue set you name, and the point table records which hydrophobic patch each point belongs to and which residue owns it. See `Surface patches`_. The patches are found on a solvent-accessible point cloud rather than a triangulated molecular surface, so their areas are not directly comparable with those of mesh-based tools such as PEP-Patch.
+The patch features add the contiguity: neighbourhood-averaged values are thresholded and touching points joined into patches, whose areas are reported over the whole surface and over any residue set you name, and the point table records which hydrophobic patch each point belongs to and which residue owns it. See `Surface patches`_. The patches are found on a solvent-accessible point cloud rather than a triangulated molecular surface, so their areas are not directly comparable with those of mesh-based tools such as PEP-Patch.
 
 It is worth being clear about what this does *not* mean, though, because the word "patch" is used very loosely in this field. **Prodes is not blind to where things sit on the surface.** Its molecular hydrophobicity potential gives each surface point an ``exp(-d)``-weighted sum over the non-hydrogen atoms within 10 Å. The weight has a decay length of 1 Å, so the 10 Å cutoff hardly matters and the value mostly reflects the one or two nearest atoms, a much shorter length scale than SAP, Genentech's HPATCH (a 10 Å average) or Protein-Sol's NPP ratio (a 13 Å ratio). The patch step's 5 Å neighbourhood average is what brings it to the scale of a surface region. Only three of the tools above actually segment the surface into discrete regions: PEP-Patch (connected components on the surface graph), PROPERMAB (DBSCAN on mesh triangles) and MOE's Protein Patch Analyzer. The rest, TAP and TNP included, compute neighbourhood-weighted quantities and then aggregate them, which is what Prodes does too. The difference is in the last step: they take a maximum or a region sum, the default Prodes features take the distribution statistics, and the patch features take a maximum and a sum, over the whole surface or a residue set.
 
@@ -846,27 +846,27 @@ Improvements in this fork
 * **Vectorised shell feature computation** — ``find_exit``, ``project_point``, and ``map_ep_to_plane`` have batch counterparts (``_batch``) that process all charged atoms simultaneously with ``np.einsum`` and broadcasting (~10x speedup on the shell phase, previously the slowest part of the pipeline).
 * **Vectorised surface grid construction** — grid construction and cell filling refactored to use NumPy arrays throughout.
 * **Multi-core parallelism** — the SASA, surface grid and shell phases are spread across worker processes on Linux.
-* **Reduced feature set** — 54 non-redundant features by default, with the original 105 available via ``--full-features``.
+* **Reduced feature set** — 54 non-redundant features of the original 105 by default, with all 105 available via ``--full-features``.
 * **Disulfide bonds recognised** — a cysteine bonded into a disulfide is no longer titrated as a free thiol, which corrected the charge-derived features of every structure with a disulfide. See `cysteines and disulfide bonds <docs/disulfide_bond_detection.md>`_.
 * **Alternate conformations resolved** — the ``altLoc`` column used to be read as part of the atom name, so a disordered residue kept every conformation in the surface and, because the package looks up charge by atom name, silently carried no charge at all. From version 7.0 one conformation per residue is kept and the atom name is read on its own. See `alternate conformations <docs/alternate_conformations.md>`_.
 * **PDB records read by Biopython** — from version 7.1 the coordinate records of a PDB file are read by ``Bio.PDB.PDBParser``, driven with a record-collecting builder of prodes' own rather than through Biopython's entity tree, which represents disorder rather than resolving it. No feature value moves on any well-formed structure. The insertion code and the model number now arrive as their own fields, which is what the two parser defects still open at that release needed; both were fixed in 8.0. See `how prodes reads a PDB file <docs/pdb_reading.md>`_.
 * **Insertion codes and NMR models** — from version 8.0 a residue is its chain, its number **and** its insertion code, and a file holding several models is described by its first. Kabat and Chothia numbering write every antibody CDR insertion as an insertion code, and reading ``H100`` and ``H100A`` as one residue put both side chains in one residue: on the 4NZU Fab that lost 12 of its 434 residues, moved the molecular weight by 1.3 kDa, titrated a lysine and a cysteine against aspartate's pKa, and hid a cysteine well enough that one of its five disulfide bonds went undetected. An NMR ensemble read whole was worse: 1PIT came out as 58 residues holding 17 780 atoms, 16 901 of them in a single residue, at a formal charge of -1096 for a protein whose real charge at pH 7 is about +6. See `what Prodes calls one residue <docs/residue_identity.md>`_.
 * **A blank element column is inferred rather than fatal** — from version 8.1 an atom whose element column is blank has its element guessed from its name, the same convention ``Bio.PDB.Atom`` uses. A blank element used to reach the van der Waals radius lookup and raise ``KeyError``, so a PDB file with no element column produced no features at all; no shipped structure has one, so no feature value moves. The count of atoms inferred is logged once per file and recorded in ``prodes_run.json`` as ``inferred_elements``. See `how Prodes reads a PDB file <docs/pdb_reading.md>`_.
 * **pKa predictions are keyed by chain** — from version 9.0 a predicted pKa is looked up by chain as well as residue number, rather than by number alone. A structure with more than one chain, an antibody's heavy and light chain included, could have a value predicted for one chain applied to another chain's same-numbered residue instead, silently whenever the two residues shared a type. ``convert_propka`` and ``convert_pypka`` now read the chain out of their source files; ``convert_hpp`` cannot, because H++'s own output carries no chain, and marks its predictions accordingly. A ``--pka`` file written before this version has no chain in it at all and is still read, applied to every chain exactly as before, with a warning recommending it be reconverted. See `pKa values and protonation states`_.
-* **Surface patches** — from version 9.1, ``--patches`` groups neighbourhood-averaged hydrophobicity and potential into contiguous patches and reports their areas over the whole surface and over named residue sets, such as antibody CDRs. Off by default; the default columns do not change. Every surface point in the bundle now also carries its area and the residue owning it. See `surface patches <docs/surface_patches.md>`_.
+* **Surface patches** — from version 10.0, every run groups neighbourhood-averaged hydrophobicity and potential into contiguous patches and reports their areas, as 11 more default features, over the whole surface and over any named residue set, such as antibody CDRs. Every surface point in the bundle also carries its area, the residue owning it and its patch. See `surface patches <docs/surface_patches.md>`_.
 * **Bug fixes** — trimean edge case for small arrays, ``surface_exit`` ``None`` handling in shell potential mapping, and a ``read_propka`` argument bug in the PDB parser.
 * **Test suite** — unit and regression tests added, including a committed reference output file (``tests/data/ARH96693_prodes_orig_output.csv``) generated by the original unrefactored code. The regression test verifies that every feature column and every feature value produced by this fork matches the original output within tolerance.
 
 Output compatibility
 ---------------------
 
-With ``--full-features``, the output has the same 105 columns in the same order as the original Prodes.
+With ``--full-features``, the output has the same 105 columns in the same order as the original Prodes, followed from version 10.0 by the 11 surface patch columns.
 
 The **values** are identical only with ``--ionic-strength 0``, and then only for a structure with no disulfide bonds and no alternate conformations. From version 9.0 a predicted pKa is applied by chain as well as residue number; this only changes a structure's features if its ``--pka`` file is reconverted with the current ``convert_propka`` or ``convert_pypka``, and then only if the structure has more than one chain and a chain-specific value lands on a residue that previously took another chain's value or none at all: on the 4NZU Fab, reconverting the same PROPKA run moves 13 of the 105 columns, the isoelectric point among them, from 6.796 to 6.808. A ``--pka`` file that predates this version, or one produced by the current ``convert_hpp``, is still applied to every chain exactly as before and changes nothing. See `pKa values and protonation states`_. From version 8.0 a residue that carries an insertion code is its own residue rather than part of the one before it, which moves the features of any structure that has one, antibodies numbered by the Kabat or Chothia schemes included: on the 4NZU Fab 69 of the 105 columns move and 36 do not. Nothing geometric moves, because no atom moves and no atom changes its own residue name: ``Area``, ``NSurfPoints``, both ``Shape`` columns and the whole hydrophobicity block are unchanged, while everything that reads a residue's type, mass or charge does move. A file holding more than one model is described by its first, which changes every feature of an NMR ensemble, all of them from nonsense to a number. Structures with neither an insertion code nor a second model are unaffected. See `what Prodes calls one residue <docs/residue_identity.md>`_. From version 7.0 only one conformation of a disordered residue is described, which changes the features of any structure that has one; the size of the change tracks how many *titratable* residues are disordered rather than how many residues are, so a structure whose alternates sit on uncharged residues barely moves. AlphaFold models contain no alternate conformations and are unaffected. See `alternate conformations <docs/alternate_conformations.md>`_. From version 6.0 a cysteine bonded into a disulfide is not titrated, which changes the charge-derived features of any structure that has one. See `cysteines and disulfide bonds <docs/disulfide_bond_detection.md>`_. From version 5.0 the electrostatic potential is screened by default, which changes the 38 ``SurfEp`` columns; the other 67, including every ``ShellEp`` column, are unaffected either way. The regression test in ``tests/test_sasa.py`` therefore runs at zero ionic strength when comparing against the committed reference file ``tests/data/ARH96693_prodes_orig_output.csv``. See `Ionic strength and screening`_.
 
-From version 9.1 the surface point table in the bundle has two more columns, ``area_A2`` and ``residue``, on every run. The feature table is unchanged unless ``--patches`` is given, which appends the patch columns after the others.
+From version 10.0 every run appends the 11 surface patch columns to the feature table, after all the others, and the surface point table in the bundle has five more columns: ``area_A2``, ``residue``, ``local_mhp``, ``local_ep_volts`` and ``mhp_patch_id``. A model trained on the columns of an earlier version has to select those columns by name. No earlier column changes value.
 
-The default reduced output is a strict subset of those columns, in the same order and with identical values. No column is renamed and no column is recomputed, so a reduced run and a full run of the same structure agree exactly on the 54 columns they share.
+The default reduced output is a strict subset of those columns, in the same order and with identical values. No column is renamed and no column is recomputed, so a reduced run and a full run of the same structure agree exactly on the 65 columns they share.
 
 How to cite
 ------------

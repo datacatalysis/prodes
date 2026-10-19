@@ -34,7 +34,7 @@ def test_defaults_are_the_documented_ones(monkeypatch):
     assert full_features is False
     assert mem_limit_mb is None
     assert ionic_strength_molar == DEFAULT_IONIC_STRENGTH_MOLAR
-    assert patches is None
+    assert patches == PatchSettings()
 
 
 def test_n_workers_flag_sets_the_environment_variable(monkeypatch):
@@ -110,7 +110,7 @@ def test_main_forwards_every_parsed_argument(monkeypatch, tmp_path):
         True,
         None,
         DEFAULT_IONIC_STRENGTH_MOLAR,
-        None,
+        PatchSettings(),
     )
     assert captured["kwargs"] == {}
 
@@ -132,14 +132,13 @@ def test_calculate_signature_matches_the_parsed_order():
     ]
 
 
-def test_patches_flag_builds_the_settings(monkeypatch, tmp_path):
-    """--patches and its options reach calculate as one PatchSettings, residue sets read from file."""
+def test_patch_options_build_the_settings(monkeypatch, tmp_path):
+    """The patch options reach calculate as one PatchSettings, residue sets read from file."""
 
     labels = tmp_path / "cdr.txt"
     labels.write_text("# CDR H3\nH95\nH100A  # an insertion\n\nL91\n")
     *_, patches = parse(
         monkeypatch,
-        "--patches",
         "--patch-radius",
         "4",
         "--patch-min-area",
@@ -155,35 +154,16 @@ def test_patches_flag_builds_the_settings(monkeypatch, tmp_path):
     assert patches == PatchSettings(radius=4, min_area=30, hydrophobic_threshold=0.02, ep_threshold=0.3, residue_sets={"CDR": ["H95", "H100A", "L91"]})
 
 
-def test_residue_set_without_patches_is_refused(monkeypatch, tmp_path):
-    """A residue set restricts the patch features, so on its own it would silently do nothing."""
-
-    labels = tmp_path / "cdr.txt"
-    labels.write_text("H95\n")
-
-    with pytest.raises(ValueError, match="need --patches"):
-        parse(monkeypatch, "--residue-set", f"CDR={labels}")
-
-
 @pytest.mark.parametrize("specification", ["CDR", "=cdr.txt", "CDR="])
 def test_a_malformed_residue_set_is_refused(monkeypatch, specification):
     """NAME=FILE is the only accepted form."""
 
     with pytest.raises(ValueError, match="NAME=FILE"):
-        parse(monkeypatch, "--patches", "--residue-set", specification)
+        parse(monkeypatch, "--residue-set", specification)
 
 
-@pytest.mark.parametrize(
-    "option", [["--patch-radius", "3"], ["--patch-min-area", "80"], ["--patch-hydrophobic-threshold", "0.1"], ["--patch-ep-threshold", "0.2"]]
-)
-def test_a_patch_option_without_patches_is_refused(monkeypatch, option):
-    """Otherwise the option would be accepted and silently do nothing."""
+def test_the_patches_option_no_longer_exists(monkeypatch):
+    """The patch features are part of every run, so there is nothing to switch on."""
 
-    with pytest.raises(ValueError, match=f"{option[0]} only apply to the patch features"):
-        parse(monkeypatch, *option)
-
-
-def test_patches_alone_gives_the_documented_defaults(monkeypatch):
-    *_, patches = parse(monkeypatch, "--patches")
-
-    assert patches == PatchSettings()
+    with pytest.raises(SystemExit):
+        parse(monkeypatch, "--patches")

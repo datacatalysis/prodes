@@ -29,7 +29,7 @@ from prodes.calculations.patches import (
     patch_statistics,
     residue_set_masks,
 )
-from prodes.feature_dictionary import REDUCED_FEATURE_CODES, FeatureDictionary
+from prodes.feature_dictionary import PATCH_FEATURE_CODES, REDUCED_FEATURE_CODES, FeatureDictionary
 from prodes.output import read_features, read_surface_points, write_bundle
 from prodes.run import calculate, construct_surface_grid, prepare_structure
 
@@ -261,21 +261,21 @@ def test_a_tie_goes_to_the_first_label_whatever_the_order():
 
 
 @cache
-def _run(full_features, patched):
+def _run(full_features, with_set):
     with tempfile.TemporaryDirectory(prefix="prodes_patch_tests_") as directory:
         out_file = Path(directory) / "bundle.zip"
-        patches = PatchSettings(residue_sets={"Nterm": N_TERMINUS}) if patched else None
+        patches = PatchSettings(residue_sets={"Nterm": N_TERMINUS}) if with_set else None
         calculate(STRUCTURE, str(out_file), full_features=full_features, patches=patches)
         return read_features(out_file), read_surface_points(out_file)
 
 
-def run(full_features=False, patched=False):
+def run(full_features=False, with_set=False):
     """Returns copies of the feature and point tables of one run per setting.
 
-    With patched, the patch step runs with one residue set, Nterm.
+    With with_set, the run is given one residue set, Nterm.
     """
 
-    features, points = _run(full_features, patched)
+    features, points = _run(full_features, with_set)
     return features.copy(), points.copy()
 
 
@@ -289,35 +289,35 @@ def test_point_areas_add_up_to_the_surface_area():
     assert all(point.residue for point in points)
 
 
-def test_the_default_features_are_unchanged_by_the_patch_step():
-    """The anion exchange mode depends on these values; the patch step only appends."""
+def test_a_residue_set_only_appends_columns():
+    """Patches are found on the whole surface, so a residue set cannot change a whole-surface value."""
 
-    default, _ = run()
-    patched, _ = run(patched=True)
+    plain, _ = run()
+    restricted, _ = run(with_set=True)
 
-    assert list(default.columns) == ["ID", *REDUCED_FEATURE_CODES]
-    assert list(patched.columns[: len(default.columns)]) == list(default.columns)
-    assert patched[default.columns].equals(default)
+    assert list(plain.columns) == ["ID", *REDUCED_FEATURE_CODES]
+    assert list(restricted.columns[: len(plain.columns)]) == list(plain.columns)
+    assert restricted[plain.columns].equals(plain)
 
 
 def test_the_columns_are_the_ones_the_dictionary_documents():
-    patched, _ = run(patched=True)
+    restricted, _ = run(with_set=True)
 
-    assert list(patched.columns[1 + len(REDUCED_FEATURE_CODES) :]) == FeatureDictionary().get_patch_feature_codes(["Nterm"])
+    assert list(restricted.columns[1:]) == FeatureDictionary().get_feature_codes(residue_sets=["Nterm"])
 
 
 def test_the_patch_step_reads_the_formal_potential_under_full_features():
     """The partial-charge phase overwrites the potential on the points; the patch step must run before it."""
 
-    reduced, _ = run(patched=True)
-    full, _ = run(full_features=True, patched=True)
-    codes = FeatureDictionary().get_patch_feature_codes(["Nterm"])
+    reduced, _ = run(with_set=True)
+    full, _ = run(full_features=True, with_set=True)
+    codes = [code for code in FeatureDictionary().get_feature_codes(residue_sets=["Nterm"]) if code in PATCH_FEATURE_CODES or code.endswith("_Nterm")]
 
     assert full[codes].equals(reduced[codes])
 
 
 def test_the_residue_set_selects_the_points_it_names():
-    features, points = run(patched=True)
+    features, points = run(with_set=True)
     in_set = points["residue"].isin(N_TERMINUS)
 
     assert features["SurfArea_Nterm"].iloc[0] == pytest.approx(points.loc[in_set, "area_A2"].sum(), abs=1e-3)
@@ -326,7 +326,7 @@ def test_the_residue_set_selects_the_points_it_names():
 
 
 def test_the_point_table_agrees_with_the_hydrophobic_patch_area():
-    features, points = run(patched=True)
+    features, points = run(with_set=True)
     in_patch = points["mhp_patch_id"] >= 0
 
     assert features["SurfMhpPatchArea"].iloc[0] == pytest.approx(points.loc[in_patch, "area_A2"].sum(), abs=1e-3)
@@ -334,7 +334,7 @@ def test_the_point_table_agrees_with_the_hydrophobic_patch_area():
 
 
 def test_restricted_values_do_not_exceed_whole_surface_ones():
-    features = run(patched=True)[0].iloc[0]
+    features = run(with_set=True)[0].iloc[0]
 
     for code in ("SurfMhpPatchArea", "SurfEpPosPatchArea", "SurfEpNegPatchArea", "SurfMhpLocalPosSum"):
         assert features[f"{code}_Nterm"] <= features[code]
@@ -413,12 +413,13 @@ def test_the_dictionary_resolves_a_residue_set_suffix_on_patch_codes_only():
     assert "Area_CDR" not in fd
     assert "SurfMhpPatchArea_CDR_H3" not in fd
     assert "SurfMhpPatchArea_CDR²" not in fd
-    with pytest.raises(KeyError, match="get_patch_feature_codes"):
+    with pytest.raises(KeyError, match="residue set suffix"):
         fd.get_entry("Area_CDR")
 
 
-def test_the_patch_codes_are_kept_out_of_the_reduced_and_full_sets():
+def test_the_patch_codes_are_the_last_of_the_default_set():
     fd = FeatureDictionary()
 
-    assert set(fd.get_patch_feature_codes()).isdisjoint(fd.get_feature_codes(full=True))
-    assert fd.get_patch_feature_codes(["CDR"])[11] == "SurfArea_CDR"
+    assert fd.get_feature_codes()[-11:] == fd.get_patch_feature_codes() == list(PATCH_FEATURE_CODES)
+    assert set(PATCH_FEATURE_CODES) <= set(fd.get_feature_codes(full=True))
+    assert fd.get_feature_codes(residue_sets=["CDR"])[65:67] == ["SurfArea_CDR", "SurfMhpPatchArea_CDR"]
