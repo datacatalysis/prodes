@@ -107,10 +107,12 @@ def test_the_run_record_says_what_was_run(bundle_dir):
         "full_features": False,
         "ionic_strength_molar": 0.15,
         "patches": {"radius_A": 5.0, "min_area_A2": 100.0, "hydrophobic_threshold": 0.0, "ep_threshold_volts": 0.5, "residue_sets": {}},
+        "drop_unknown_residues": True,
     }
     # ARH96693 is an AlphaFold model with three cysteines and no disulfide, so
     # the key has to be present and zero rather than absent.
     assert record["disulfides"] == 0
+    assert record["removed_residues"] == []
     assert record["surface_points"] > 0
     assert record["ep_min_volts"] <= record["ep_max_volts"]
     assert record["input_file"].endswith("ARH96693.pdb.zip")

@@ -41,6 +41,10 @@ class Structure:
         # for a single model file read for one record type with no alternate
         # conformations.
         self.inferred_elements = 0
+        # The residues prodes.io.parser.remove_unknown_residues left out because
+        # they are not one of the 20 standard amino acids, as "UNK A1" labels.
+        # Empty unless the structure was read with drop_unknown_residues.
+        self.removed_residues = []
 
     def _compute_centroid(self):
         coords = np.array([[a.x, a.y, a.z] for a in self.heavy_atoms])

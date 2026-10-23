@@ -10,7 +10,7 @@ from prodes.core.atom import Atom
 from prodes.core.chain import Chain
 from prodes.core.residue import Residue
 from prodes.core.structure import Structure
-from prodes.io.conformers import elect_conformers, report_alternate_conformers
+from prodes.io.conformers import elect_conformers, report_alternate_conformers, residue_key, residue_label
 from prodes.io.pdb_reader import COORDINATE_DECIMALS, pdb_lines, read_atom_records
 
 logger = logging.getLogger(__name__)
@@ -377,7 +377,7 @@ def build_structure(name, records):
     return structure
 
 
-def parse_pdb_text(text, name, identifier="ATOM"):
+def parse_pdb_text(text, name, identifier="ATOM", drop_unknown_residues=True):
     """Reads the text of a PDB file into a Structure.
 
     The records are read in full before anything is built, because which
@@ -401,10 +401,15 @@ def parse_pdb_text(text, name, identifier="ATOM"):
         text: the text of a PDB file.
         name: the name to give the structure, which becomes the output ID.
         identifier: the record type to build atoms from, ATOM or HETATM.
+        drop_unknown_residues: leave out the protein residues that are not
+            one of the 20 standard amino acids with a warning, the default, or
+            raise when False. See remove_unknown_residues.
 
     Raises:
-        ValueError: if the file holds no records of the requested type, or if
-            any coordinate record could not be read.
+        ValueError: if the file holds no records of the requested type, if
+            any coordinate record could not be read, or if a protein residue
+            is not one of the 20 standard amino acids and
+            drop_unknown_residues is False.
     """
 
     lines = pdb_lines(text)
@@ -428,21 +433,152 @@ def parse_pdb_text(text, name, identifier="ATOM"):
 
     kept, report = elect_conformers(records)
 
+    # After the election, because a file can model one position as two
+    # different amino acids and only the elected one is the residue. Only for
+    # protein atoms: a HETATM parse reads ligands and waters, none of which is
+    # in the residue table.
+    removed = []
+    ends_removed = {}
+    if identifier == "ATOM":
+        kept, removed, ends_removed = remove_unknown_residues(kept, name, drop_unknown_residues)
+        # A residue the election renamed to an unknown name and that was then
+        # removed is described by the removal, not by a rename the features
+        # never saw, so the two lists in the run record do not contradict.
+        removed_labels = {label.split(" ", 1)[1] for label in removed}
+        report.renamed = [entry for entry in report.renamed if residue_label(entry[0]) not in removed_labels]
+
     structure = build_structure(name, kept)
     structure.models = models
     structure.alternate_conformers = report
     structure.inferred_elements = sum(1 for record in kept if record.element_inferred)
+    structure.removed_residues = removed
     report_alternate_conformers(report, name)
 
     structure.residues[-1].terminus = "C"
+    clear_removed_termini(structure, ends_removed)
     assign_disulfides(structure, ssbond_records(lines) if identifier == "ATOM" else [])
 
     return structure
 
 
+def remove_unknown_residues(records, name, drop):
+    """Removes the records of residues that are not in the residue table, or raises.
+
+    The residue table holds the 20 standard amino acids. Anything else, such
+    as the UNK a structure predictor builds for an X in its input sequence,
+    has no radius, pKa or hydrophobicity to read, and used to stop the run
+    with a KeyError deep in the surface calculation.
+
+    With drop set, the default of every caller, the residues are removed with
+    a warning naming each one, and the features describe the structure
+    without their atoms. One or two such residues in an antibody of 1300 move
+    the features little, and a run that stops on them gives nothing at all,
+    which for an unattended caller is the worse outcome. Without drop, a
+    ValueError names every such residue, by chain and number, before any slow
+    phase has started. Which chain ends were among them is
+    returned as well: a residue removed from the end of a chain takes its free
+    terminal charge with it rather than handing it to its neighbour, which is
+    bonded to something in the molecule and has no free amine or carboxylate.
+
+    Returns:
+        (kept records, removed residues as "UNK A1" labels in file order,
+        {chain name: set of "N" and/or "C" for each end that was removed}).
+
+    Raises:
+        ValueError: if a residue is not in the residue table and drop is not
+            set, or if every residue is.
+    """
+
+    from prodes import data
+
+    known = data.all_residues()
+    # A residue is unknown if any of its records names an unknown residue,
+    # since every atom reads its own residue name for its radius. The ends of
+    # a chain are its first and last residue in order of first appearance,
+    # which is the order build_structure gives chain.residues.
+    unknown = {}
+    chain_keys = {}
+    for record in records:
+        key = residue_key(record)
+        chain_keys.setdefault(record.chain_name, {}).setdefault(key, None)
+        if record.residue_name not in known:
+            unknown.setdefault(key, record.residue_name)
+
+    if not unknown:
+        return records, [], {}
+
+    labels = [f"{residue_name} {residue_label(key)}" for key, residue_name in unknown.items()]
+    if not drop:
+        raise ValueError(
+            f"{name} holds {count_residues(labels)} that {'is' if len(labels) == 1 else 'are'} not one of the 20 standard amino acids, so Prodes has no data for {'it' if len(labels) == 1 else 'them'}: "
+            f"{', '.join(labels)}. Replace them in the structure, or leave drop_unknown_residues at its default of True (do not pass --no-drop-unknown-residues) to leave them out with a warning."
+        )
+
+    kept = [record for record in records if residue_key(record) not in unknown]
+    if not kept:
+        raise ValueError(f"{name} holds no residue that is one of the 20 standard amino acids")
+
+    ends_removed = {}
+    for chain_name, keys in chain_keys.items():
+        keys = list(keys)
+        ends = set()
+        if keys[0] in unknown:
+            ends.add("N")
+        if keys[-1] in unknown:
+            ends.add("C")
+        if ends:
+            ends_removed[chain_name] = ends
+
+    logger.warning(
+        "%s: left out %s that %s not one of the 20 standard amino acids: %s. The features describe the structure without their atoms.",
+        name,
+        count_residues(labels),
+        "is" if len(labels) == 1 else "are",
+        ", ".join(labels),
+    )
+    return kept, labels, ends_removed
+
+
+def count_residues(labels):
+    """Returns "1 residue" or "3 residues", for a message."""
+
+    return f"{len(labels)} residue{'' if len(labels) == 1 else 's'}"
+
+
+def clear_removed_termini(structure, ends_removed):
+    """Takes the terminus away from a chain whose end residue was removed.
+
+    The residue now at that end is bonded to the removed one in the molecule,
+    so it carries no terminal charge. Two things decide a terminal charge and
+    both are set here, by the same rule: the flags on the chain, which
+    Residue.pkas reads to decide which terminal group a residue has, and
+    residue.terminus, which Atom.charge reads to decide which atom carries it.
+    Runs after parse_pdb_text has written the structure's last C terminus, so
+    that nothing writes one back afterwards.
+
+    Only the chains that lost an end are touched, so every other chain keeps
+    the termini build_structure gave it.
+    """
+
+    for chain in structure.chains:
+        ends = ends_removed.get(chain.name)
+        if not ends:
+            continue
+        chain.n_terminus_removed = "N" in ends
+        chain.c_terminus_removed = "C" in ends
+        for residue in chain.residues:
+            residue.terminus = None
+        # The same if/elif as Residue.pkas, so a chain left with one residue
+        # gets the terminus pkas gives it a group for.
+        if not chain.n_terminus_removed:
+            chain.residues[0].terminus = "N"
+        elif not chain.c_terminus_removed:
+            chain.residues[-1].terminus = "C"
+
+
 class PDBparser:
 
-    def parse(self, file, identifier="ATOM"):
+    def parse(self, file, identifier="ATOM", drop_unknown_residues=True):
         """Parses pdb files, either plain or held in a zip archive
 
         A zipped structure is read straight out of the archive, so that callers
@@ -469,7 +605,7 @@ class PDBparser:
         else:
             raise ValueError("File extension not recognized by parser")
 
-        return parse_pdb_text(read_pdb_text(path), name, identifier)
+        return parse_pdb_text(read_pdb_text(path), name, identifier, drop_unknown_residues)
 
 
 def read_pka(file):

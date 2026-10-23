@@ -78,9 +78,12 @@ class Residue:
             # every consumer of pkas agrees about it.
             if pka is not None and self.disulfide_partner is None:
                 pkas.append({self.name: pka})
-            if self == self.chain.residues[0]:
+            # A chain whose end residue was left out as unknown has no free
+            # terminus at that end: the residue there now is bonded to the
+            # removed one in the molecule.
+            if self == self.chain.residues[0] and not self.chain.n_terminus_removed:
                 pkas.append({"N+": data.n_term_pka()})
-            elif self == self.chain.residues[-1]:
+            elif self == self.chain.residues[-1] and not self.chain.c_terminus_removed:
                 pkas.append({"C-": data.c_term_pka()})
             if len(pkas) > 0:
                 self._pka = pkas
