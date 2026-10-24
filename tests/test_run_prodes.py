@@ -61,6 +61,7 @@ def test_arguments_are_forwarded(monkeypatch):
         full_features=True,
         mem_limit_mb=512,
         patches=PatchSettings(radius=4.0),
+        drop_unknown_residues=False,
     )
 
     assert captured == {
@@ -74,6 +75,7 @@ def test_arguments_are_forwarded(monkeypatch):
         "mem_limit_mb": 512,
         "ionic_strength_molar": 0.15,
         "patches": PatchSettings(radius=4.0),
+        "drop_unknown_residues": False,
     }
 
 

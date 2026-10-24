@@ -1,5 +1,7 @@
 import argparse
+import dataclasses
 import faulthandler
+import logging
 import math
 import os
 
@@ -23,6 +25,8 @@ from prodes.io import parser as ps
 from prodes.output import run_metadata, write_bundle
 from prodes.parallel import run_tasks, validate_settings, worker_mem_limit_mb
 from prodes.viz import surface_point_arrays
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -112,6 +116,12 @@ def parse_arguments():
         help="Number of worker processes, Linux only (default: from PRODES_N_WORKERS env var, or half the logical CPUs)",
     )
     parser.add_argument(
+        "--drop-unknown-residues",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Leave out residues that are not one of the 20 standard amino acids, such as UNK, with a warning, and list them in prodes_run.json (default). --no-drop-unknown-residues stops with an error naming them instead",
+    )
+    parser.add_argument(
         "--chunksize",
         type=int,
         default=None,
@@ -154,7 +164,36 @@ def parse_arguments():
         residue_sets=read_residue_sets(arg.residue_set),
     )
 
-    return pdb_file, out_file, pkas_file, ph, r_probe, hydro_scale, full_features, mem_limit_mb, ionic_strength_molar, patches
+    return pdb_file, out_file, pkas_file, ph, r_probe, hydro_scale, full_features, mem_limit_mb, ionic_strength_molar, patches, arg.drop_unknown_residues
+
+
+def without_removed_residues(patches, removed_residues):
+    """Returns the patch settings with the removed residues taken out of every residue set.
+
+    A residue left out with drop_unknown_residues has no surface to restrict a
+    patch to, and a set naming it would otherwise fail the check that every
+    label is in the structure, which is the check for a typo. Taking it out is
+    said in the log, and the run record lists the removed residues already.
+
+    Raises:
+        ValueError: if a residue set names nothing but removed residues.
+    """
+
+    if not removed_residues or not patches.residue_sets:
+        return patches
+
+    # Removed residues are written "UNK A1", and residue sets name residues by
+    # the label alone.
+    removed = {label.split(" ", 1)[1] for label in removed_residues}
+    residue_sets = {}
+    for name, labels in patches.residue_sets.items():
+        kept = [label for label in labels if label not in removed]
+        if not kept:
+            raise ValueError(f"residue set {name} names only residues that were left out as unknown: {', '.join(labels)}")
+        if len(kept) < len(labels):
+            logger.warning("residue set %s loses the residues that were left out as unknown: %s", name, ", ".join(sorted(set(labels) - set(kept))))
+        residue_sets[name] = kept
+    return dataclasses.replace(patches, residue_sets=residue_sets)
 
 
 def read_residue_sets(specifications):
@@ -513,10 +552,10 @@ def calculate_structure_features(structure, ph, r_probe, features: dict, full_fe
     return features
 
 
-def prepare_structure(pdb_file, pkas_file):
+def prepare_structure(pdb_file, pkas_file, drop_unknown_residues=True):
     """loads and prepares the structure for the calculations"""
 
-    structure = ps.PDBparser().parse(pdb_file)
+    structure = ps.PDBparser().parse(pdb_file, drop_unknown_residues=drop_unknown_residues)
     if pkas_file:
         pkas = ps.read_pka(pkas_file)
         structure.redo_pkas(pkas)
@@ -554,6 +593,7 @@ def calculate(
     mem_limit_mb=None,
     ionic_strength_molar=DEFAULT_IONIC_STRENGTH_MOLAR,
     patches=None,
+    drop_unknown_residues=True,
 ):
     """Calculates a list of supported features and returns a csv file
 
@@ -580,6 +620,13 @@ def calculate(
             patch features, such as residue sets to restrict them to. None, the
             default, means PatchSettings(): the default settings and no
             residue sets. The patch features are part of every run.
+        drop_unknown_residues: True, the default, leaves out the residues
+            that are not one of the 20 standard amino acids, such as the UNK a
+            structure predictor builds for an X in its sequence, with a
+            warning. They are listed in prodes_run.json as removed_residues, a
+            residue set naming one of them loses it, and a chain end that was
+            removed carries no terminal charge. False raises a ValueError
+            naming them instead. See README, "Input files".
 
     Thread safety
         Safe to run in several processes, one structure each, which is how the
@@ -598,7 +645,8 @@ def calculate(
     # Both checks are cheap, and the surface phase that follows is not.
     patches.resolved_hydrophobic_threshold(hydro_scale)
 
-    structure = prepare_structure(pdb_file, pkas_file)
+    structure = prepare_structure(pdb_file, pkas_file, drop_unknown_residues)
+    patches = without_removed_residues(patches, structure.removed_residues)
     check_residue_sets(patches.residue_sets, [residue.label for residue in structure.residues])
     # Reported before the slow phases, so that a structure whose disulfides were
     # not found can be spotted without waiting for the run to finish.
@@ -648,6 +696,7 @@ def calculate(
         "full_features": full_features,
         "ionic_strength_molar": ionic_strength_molar,
         "patches": patches.record(hydro_scale),
+        "drop_unknown_residues": drop_unknown_residues,
     }
     metadata = run_metadata(
         pdb_file,
@@ -658,6 +707,7 @@ def calculate(
         alternate_conformers=structure.alternate_conformers.summary() if structure.alternate_conformers else None,
         models=structure.models,
         inferred_elements=structure.inferred_elements,
+        removed_residues=structure.removed_residues,
     )
 
     return write_bundle(out_file, structure.name, calculated_features, coords, ep, lipo, pdb_file, metadata, hydro_scale, point_columns=point_columns)

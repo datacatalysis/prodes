@@ -129,7 +129,7 @@ def prodes_version():
         return "unknown"
 
 
-def run_metadata(pdb_file, settings, n_points, ep, disulfides=0, alternate_conformers=None, models=1, inferred_elements=0):
+def run_metadata(pdb_file, settings, n_points, ep, disulfides=0, alternate_conformers=None, models=1, inferred_elements=0, removed_residues=None):
     """Returns the record of what was run, written into every bundle.
 
     The disulfide count is here rather than in the feature table because it
@@ -149,6 +149,11 @@ def run_metadata(pdb_file, settings, n_points, ep, disulfides=0, alternate_confo
     The inferred element count says how many atoms of the structure had their
     radius, and so their contribution to the surface, decided by a guess at
     their element rather than by the file's own columns. See docs/pdb_reading.md.
+
+    The removed residues are the ones left out with drop_unknown_residues
+    because they are not one of the 20 standard amino acids, as "UNK A1"
+    labels. The shipped file still holds them, so this is the only place that
+    says the features describe the structure without their atoms.
     """
 
     return {
@@ -160,6 +165,7 @@ def run_metadata(pdb_file, settings, n_points, ep, disulfides=0, alternate_confo
         "alternate_conformers": alternate_conformers or {},
         "models_in_file": int(models),
         "inferred_elements": int(inferred_elements),
+        "removed_residues": list(removed_residues or []),
         "surface_points": int(n_points),
         "ep_min_volts": round(float(ep.min()), 3) if n_points else None,
         "ep_max_volts": round(float(ep.max()), 3) if n_points else None,

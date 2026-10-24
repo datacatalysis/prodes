@@ -8,6 +8,12 @@ class Chain:
         self.atoms = np.empty([0])
         self.name = name
         self.structure = structure
+        # Set by prodes.io.parser.clear_removed_termini when the residue at that
+        # end was left out as unknown. The residue now at that end is bonded to
+        # the removed one in the molecule, so Residue.pkas gives it no terminal
+        # group.
+        self.n_terminus_removed = False
+        self.c_terminus_removed = False
         self._x = None
         self._y = None
         self._z = None

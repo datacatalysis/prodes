@@ -14,6 +14,7 @@ def run_prodes(
     mem_limit_mb=None,
     ionic_strength_molar=run.DEFAULT_IONIC_STRENGTH_MOLAR,
     patches=None,
+    drop_unknown_residues=True,
 ):
     """Runs Prodes similar as the commandline tool.
 
@@ -40,6 +41,9 @@ def run_prodes(
         patches: a prodes.calculations.patches.PatchSettings for the surface
             patch features, such as residue sets to restrict them to. None means
             the default settings and no residue sets.
+        drop_unknown_residues: leave out the residues that are not one of the
+            20 standard amino acids, such as UNK, with a warning (the
+            default), or raise when False. See prodes.run.calculate.
     """
 
     calculate(
@@ -53,19 +57,26 @@ def run_prodes(
         mem_limit_mb=mem_limit_mb,
         ionic_strength_molar=ionic_strength_molar,
         patches=patches,
+        drop_unknown_residues=drop_unknown_residues,
     )
 
 
-def read(file):
+def read(file, drop_unknown_residues=True):
     """Loads files
     List of supported extentions:
     .pdb
     .pdb.zip
     .pka: a pKa file in the json layout written by prodes.io.pka_converter,
-        rather than the raw output of PROPKA or pypka"""
+        rather than the raw output of PROPKA or pypka
+
+    A residue that is not one of the 20 standard amino acids, such as UNK, is
+    left out with a warning and listed in structure.removed_residues. With
+    drop_unknown_residues=False it raises a ValueError naming it instead. See
+    prodes.io.parser.remove_unknown_residues.
+    """
 
     if file.endswith((".pdb", ".pdb.zip")):
-        structure = parser.PDBparser().parse(file)
+        structure = parser.PDBparser().parse(file, drop_unknown_residues=drop_unknown_residues)
         return structure
 
     elif file[-4:] == ".pka":

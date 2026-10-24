@@ -18,6 +18,8 @@ file text
    │
    ├─ prodes.io.conformers.elect_conformers    one conformation per residue, the 7.0 rules
    │
+   ├─ prodes.io.parser.remove_unknown_residues residues outside the 20 standard amino acids: left out with a warning, from 11.0
+   │
    └─ prodes.io.parser.build_structure         Structure, Chain, Residue, Atom
 ```
 
