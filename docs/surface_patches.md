@@ -90,7 +90,7 @@ The point table, `*_surface_points.csv`, carries `area_A2`, `residue`, `local_mh
 
 ## Limitations
 
-- **Truncated structures.** On an Fv or Fab cut out of a larger molecule, the surface that faces the removed domains is exposed only because of the cut, and the terminal oxygen (`OXT`) contributes 1.0, the top of the default `mj_scaled` scale; see [the terminal oxygen](structure_preparation.md#what-happens-to-a-predicted-structure-the-terminal-oxygen). Both can form or enlarge whole-surface patches. Columns restricted to a residue set away from the cut, such as the CDRs, are not affected.
+- **Truncated structures.** On an Fv or Fab cut out of a larger molecule, the surface that faces the removed domains is exposed only because of the cut, and can form or enlarge whole-surface patches. Columns restricted to a residue set away from the cut, such as the CDRs, are not affected.
 - **Clefts.** The neighbourhood is a Euclidean sphere, so at 5 A it can reach across a narrow cleft to the facing surface.
 - **Internal cavities and separate surfaces.** The surface grid is built by a flood fill from one point, so a surface component that does not touch the rest, such as an internal cavity or a second molecule that does not touch the first, is not part of it. This applies to every surface feature, not only the patches, and is why the point areas can add up to less than `Area`.
 - **Residues with little exposed surface.** A surface point belongs to the residue whose dots carry the most area in its 1 A cell, so a residue with only a sliver of exposed surface can own no point. A residue set none of whose residues owns a point stops the run with an error rather than reporting zeros.

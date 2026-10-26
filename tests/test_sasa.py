@@ -56,6 +56,14 @@ COUNT_COLUMNS = {
 FULL_OUTPUT = pipeline_output(PDB_PATH, full_features=True, ionic_strength_molar=0)
 REDUCED_OUTPUT = pipeline_output(PDB_PATH, full_features=False, ionic_strength_molar=0)
 
+# The original gave the C-terminal oxygen OXT a hydrophobicity of 1.0 on every
+# scale, and ARH96693 has one OXT, on chain A SER 60. The comparison with the
+# reference therefore runs with that value restored, which keeps all 105 columns
+# under test. test_oxt_value_moves_only_hydrophobicity_columns checks that the
+# shipped value changes nothing else.
+ORIGINAL_OXT_HYDROPHOBICITY = 1.0
+FULL_OUTPUT_ORIGINAL_OXT = pipeline_output(PDB_PATH, full_features=True, ionic_strength_molar=0, oxt_hydrophobicity=ORIGINAL_OXT_HYDROPHOBICITY)
+
 ORIGINAL_OUTPUT = pd.read_csv(ORIG_OUTPUT)
 
 
@@ -72,6 +80,9 @@ def test_all_columns_present():
 def test_feature_values_match_original():
     """All feature values should match the original output within tolerance.
 
+    Compared on the run with the original OXT hydrophobicity restored; see
+    ORIGINAL_OXT_HYDROPHOBICITY.
+
     The reference was produced by the original implementation, which rounded the
     projected potential to two decimals. This fork rounds to three, because at two
     a point whose potential fell between 0 and 0.005 rounded to zero and left the
@@ -85,7 +96,7 @@ def test_feature_values_match_original():
     feature moves when a point near zero crosses the boundary, which is exactly
     the bias being removed.
     """
-    calc = FULL_OUTPUT.iloc[0].drop("ID")
+    calc = FULL_OUTPUT_ORIGINAL_OXT.iloc[0].drop("ID")
     orig = ORIGINAL_OUTPUT.iloc[0].drop("ID")
 
     mismatches = []
@@ -111,6 +122,22 @@ def test_feature_values_match_original():
             mismatches.append(f"{col}: orig={orig_val}, calc={calc_val}, " f"diff={abs(calc_val - orig_val):.6f}, tol={tolerance:.4f}")
 
     assert len(mismatches) == 0, f"Value mismatches for {len(mismatches)} columns:\n" + "\n".join(mismatches[:20])
+
+
+def test_oxt_value_moves_only_hydrophobicity_columns():
+    """The shipped OXT value changes hydrophobicity columns of ARH96693 and no other column.
+
+    ARH96693 has one OXT, so the hydrophobicity columns must move. Every other
+    column must be identical to the last digit, since OXT carries no charge and
+    the surface is the same in both runs.
+    """
+    shipped = FULL_OUTPUT.iloc[0].drop("ID")
+    original_oxt = FULL_OUTPUT_ORIGINAL_OXT.iloc[0].drop("ID")
+
+    moved = {col for col in shipped.index if shipped[col] != original_oxt[col]}
+
+    assert moved, "the OXT value moved no column, so ARH96693 no longer exercises it"
+    assert all("Mhp" in col for col in moved), f"columns outside the hydrophobicity block moved: {sorted(c for c in moved if 'Mhp' not in c)}"
 
 
 def test_reduced_output_is_a_strict_column_subset_of_full():
