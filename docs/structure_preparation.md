@@ -65,15 +65,13 @@ Run PDB2PQR over a set of predicted structures and you will usually see it add e
 
 Boltz2 leaves it off, AlphaFold always writes it, and a crystal structure has it or not depending on whether the terminal residue was resolved. So the same protein arrives with a different atom count depending on where its structure came from.
 
-**Why that matters here.** Prodes assigns hydrophobicity per residue, giving every heavy atom the value of the residue it belongs to. `OXT` is the one exception: `Property_point.set_lipo` gives it a fixed value of 1.0, which on the default `mj_scaled` scale is the maximum, the same as phenylalanine. A carboxylate oxygen is one of the most hydrophilic groups in a protein, so the value is the wrong way round.
+**Why that matters here.** Prodes assigns hydrophobicity per residue, giving every heavy atom the value of the residue it belongs to. `OXT` is the one exception: it takes the ASP value of the selected scale, the value of the same chemical group, -0.80 on the default `mj_scaled`. See [the hydrophobicity of the terminal oxygen](oxt_hydrophobicity.md).
 
-This behaviour is inherited from the original [tneijenhuis/prodes](https://github.com/tneijenhuis/prodes) repository, which this fork preserves.
+**The practical consequence is inconsistency, and that is what the repair fixes.** One more hydrophilic atom on the surface moves the hydrophobicity features of a structure in one direction. On the six test structures that have an `OXT`, removing it raises `SurfMhpSum` on all six on `mj_scaled`, by a median of 0.27 per cent. Removing an atom also changes the surface itself, so features outside the hydrophobicity block move slightly as well.
 
-**The practical consequence is inconsistency, and that is what the repair fixes.** Adding one `OXT` to a Boltz2 model moves a median of 9 of the 54 default features. Most of that is the ordinary effect of one more atom on the surface, but two hydrophobicity features move in one direction: `NSurfPosMhp` rises on 33 of the 39 structures where it moves at all, and `SurfMhpMean` rises on 12 of the 13.
+The size of that shift is small. The problem is that it is applied to the AlphaFold database models, to no Boltz2 model as Boltz2 writes it, and to most but not all crystal structures. A model trained across sources is then partly learning which predictor produced each file.
 
-The size of that shift is small. The problem is that today it is applied to every AlphaFold structure, no Boltz2 structure, and most but not all crystal structures. A model trained across sources is then partly learning which predictor produced each file.
-
-Repairing every structure with PDB2PQR removes that, because every structure ends up with exactly one `OXT` per chain. The artefact becomes a constant rather than a per-source bias, which is the thing that actually damages a model. Until the constant itself is changed, consistency is what matters, and this is the cheapest way to get it.
+Repairing every structure with PDB2PQR removes that, because every structure ends up with exactly one `OXT` per chain. The shift becomes the same for every structure rather than a difference between sources, and a difference between sources is the thing that actually damages a model.
 
 ## The commands
 

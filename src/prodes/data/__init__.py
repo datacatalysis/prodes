@@ -15,6 +15,25 @@ def hydrophobic_scale(scale):
         raise KeyError(f"Scale {scale} is not found in the list of hydrophobicity scales") from err
 
 
+def oxt_hydrophobicity(scale_dict):
+    """Returns the hydrophobicity given to the C-terminal oxygen OXT on this scale.
+
+    OXT is the second oxygen of the C-terminal carboxylate, the same chemical
+    group as the side chain of aspartate, so it takes the scale's ASP value.
+    The atom-level schemes type it that way: the Ghose-Crippen typing of the
+    surface_analyses package gives OXT the acid oxygen type O12 of ASP OD2, and
+    the Eisenberg-McLachlan and EEF1 solvation models give it the value of ASP
+    OD1 and OD2. Every other heavy atom takes the value of its own residue,
+    which for OXT would put a hydrophobic value on the carboxylate of a
+    C-terminal PHE. See docs/oxt_hydrophobicity.md.
+
+    Args:
+        scale_dict: residue name to hydrophobicity, as returned by hydrophobic_scale.
+    """
+
+    return scale_dict["ASP"]
+
+
 def residue_data(residue):
     """loads the data relating to a specific amino acid residue"""
     aas = all_residues()

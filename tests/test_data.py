@@ -30,6 +30,13 @@ def test_hydrophobic_scale():
         data.hydrophobic_scale("K")
 
 
+@pytest.mark.parametrize("scale", ["cw", "kd", "mj", "mj_scaled"])
+def test_every_shipped_scale_covers_the_20_standard_residues(scale):
+    """Every heavy atom is looked up by its residue, and OXT by ASP, so a scale missing one fails mid-run."""
+
+    assert set(data.hydrophobic_scale(scale)) == set(data.all_residues())
+
+
 def test_residue_data():
     assert data.residue_data("ARG") == {
         "letter": "R",

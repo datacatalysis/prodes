@@ -146,7 +146,7 @@ class Property_point:
         Arguments:
             Atoms : array of Atom objects"""
 
-        from prodes.data import hydrophobic_scale
+        from prodes.data import hydrophobic_scale, oxt_hydrophobicity
 
         non_h = [atom for atom in atoms if atom.element != "H"]
         if not non_h:
@@ -165,7 +165,8 @@ class Property_point:
 
         dists_masked = dists[mask]
         atoms_masked = [a for a, m in zip(non_h, mask, strict=True) if m]
-        contributions = np.array([1.0 if a.name == "OXT" else scale_dict[a.residue_name] for a in atoms_masked])
+        oxt_value = oxt_hydrophobicity(scale_dict)
+        contributions = np.array([oxt_value if a.name == "OXT" else scale_dict[a.residue_name] for a in atoms_masked])
         lipophilicity = float(np.sum(contributions * np.exp(-dists_masked)))
         self.__lipo = lipophilicity
 
