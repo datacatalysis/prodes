@@ -109,6 +109,21 @@ It needs a GitGuardian account. If you do not have one, set one up, then either 
 
 This is deliberately not in ``.pre-commit-config.yaml``, which everyone runs: ggshield needs an account, so a hook there would break the first commit of anyone who clones the repository. Outside contributors need only ``pre-commit install`` and are unaffected. See `SECURITY.md <SECURITY.md>`_.
 
+Versions and releases
+~~~~~~~~~~~~~~~~~~~~~
+
+The version is declared once, as ``version`` in ``pyproject.toml``. Tags are the bare version with no ``v`` prefix, for example ``12.0.1``. A change that moves any feature value is a major bump.
+
+Every pull request raises the version. The ``version`` job in ``.github/workflows/tests.yml`` fails unless the version on the branch is above the version on ``main`` and above every existing tag. After a rebase onto a ``main`` that has released in the meantime, raise it again. The same check runs locally:
+
+.. code-block:: text
+
+    python .github/scripts/check_version_bumped.py --base main --fetch
+
+Nobody tags by hand. When a pull request is merged and the tests and lint pass on ``main``, the ``tag`` job creates the annotated tag on the merge commit and publishes a GitHub Release whose notes list the merged pull requests since the previous tag. A push to ``main`` that does not change the version creates nothing. For a release that changes feature values, edit the Release on GitHub afterwards and put a short note above the generated list.
+
+``.github/workflows/advisories.yml`` runs ``pip-audit`` over the installed environment every Monday and fails on any published advisory. Dependabot proposes updates to the GitHub Actions used by the workflows. Python pins are moved by hand, in ``pyproject.toml``, ``environment.yml`` and ``environment_dev.yml`` together.
+
 Quick start
 ------------
 
