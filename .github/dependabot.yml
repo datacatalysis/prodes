@@ -2,8 +2,9 @@
 # merged, which is what keeps every pin exact. Python packages are not listed: each
 # pin is mirrored in pyproject.toml, environment.yml and environment_dev.yml, and
 # tests/test_dependency_versions.py holds them in step, which a Dependabot pull
-# request touching pyproject.toml alone would break. .github/workflows/advisories.yml
-# reports their advisories instead.
+# request touching pyproject.toml alone would break. Security advisories for the
+# pinned runtime dependencies are reported by Dependabot alerts, which is a
+# repository setting and needs no entry here.
 version: 2
 updates:
   - package-ecosystem: github-actions
