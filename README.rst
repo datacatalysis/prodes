@@ -122,7 +122,7 @@ Every pull request raises the version. The ``version`` job in ``.github/workflow
 
 Nobody tags by hand. When a pull request is merged and the tests and lint pass on ``main``, the ``tag`` job creates the annotated tag on the merge commit and publishes a GitHub Release whose notes list the merged pull requests since the previous tag. A push to ``main`` that does not change the version creates nothing. For a release that changes feature values, edit the Release on GitHub afterwards and put a short note above the generated list.
 
-``.github/workflows/advisories.yml`` runs ``pip-audit`` over the installed environment every Monday and fails on any published advisory. Dependabot proposes updates to the GitHub Actions used by the workflows. Python pins are moved by hand, in ``pyproject.toml``, ``environment.yml`` and ``environment_dev.yml`` together.
+Dependabot proposes updates to the GitHub Actions used by the workflows. Security advisories for the pinned runtime dependencies are reported by Dependabot alerts, under the repository's Security tab. Python pins are moved by hand, in ``pyproject.toml``, ``environment.yml`` and ``environment_dev.yml`` together.
 
 Quick start
 ------------
